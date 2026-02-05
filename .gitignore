@@ -80,5 +80,6 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-.backup_manifest.json
 backup_test/
+
+stuff.md

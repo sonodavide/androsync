@@ -1,19 +1,17 @@
 """
 Backup Manager Module
-Orchestrates the backup process with incremental sync support.
+Orchestrates the backup process with rsync-like incremental sync.
+No manifest needed - compares directly with local files.
 """
 
 import os
 from dataclasses import dataclass
 from typing import Optional, Callable
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .adb import pull_file, pull_files_tar, ADBError, get_single_device
-from .scanner import MediaFolder, get_all_media_files, is_media_file
-from .manifest import Manifest
-
-# Threshold for using batch mode (number of files)
-BATCH_MODE_THRESHOLD = 50
+from .scanner import MediaFolder, get_all_media_files
 
 
 class BackupStatus(Enum):
@@ -30,7 +28,7 @@ class BackupProgress:
     """Progress information for backup operation."""
     total_files: int
     completed_files: int
-    skipped_files: int  # Already synced
+    skipped_files: int  # Already exist locally
     failed_files: int
     current_file: str
     total_bytes: int
@@ -57,18 +55,18 @@ class FileToSync:
     local_path: str
     size: int
     mtime: str
-    needs_sync: bool  # False if already synced
+    needs_sync: bool  # False if already exists locally with same size
 
 
 class BackupManager:
     """
-    Manages backup operations with incremental sync support.
+    Manages backup operations with rsync-like incremental sync.
     
     Features:
-    - Incremental backup (only downloads new/modified files)
+    - Rsync-like comparison: checks local files directly
+    - Multithread local file checking for speed
+    - No manifest needed
     - Progress tracking with callbacks
-    - Interrupt and resume support via manifest
-    - Maintains folder structure from device
     """
     
     def __init__(self, destination: str, device_serial: Optional[str] = None):
@@ -81,84 +79,135 @@ class BackupManager:
         """
         self.destination = destination
         self.device_serial = device_serial
-        self.manifest = Manifest(destination)
         self._cancelled = False
         
-        # Set device info in manifest
-        device = get_single_device()
-        if device:
-            self.manifest.set_device_info(device.serial, device.model)
+        # Ensure destination exists
+        os.makedirs(destination, exist_ok=True)
+    
+    def _get_local_path(self, remote_path: str) -> str:
+        """Calculate local path from remote path, maintaining folder structure."""
+        relative_path = remote_path
+        if relative_path.startswith('/sdcard/'):
+            relative_path = 'internal/' + relative_path[8:]
+        elif relative_path.startswith('/storage/emulated/0/'):
+            relative_path = 'internal/' + relative_path[20:]
+        elif relative_path.startswith('/storage/'):
+            # SD card or other storage: /storage/XXXX-XXXX/... -> sdcard_XXXX-XXXX/...
+            parts = relative_path[9:].split('/', 1)
+            if len(parts) == 2:
+                storage_name = parts[0]
+                rest = parts[1]
+                relative_path = f'sdcard_{storage_name}/{rest}'
+            else:
+                relative_path = relative_path[1:]
+        
+        return os.path.join(self.destination, relative_path)
+    
+    def _check_local_file(self, local_path: str, expected_size: int) -> bool:
+        """Check if local file exists and has matching size."""
+        try:
+            stat = os.stat(local_path)
+            return stat.st_size == expected_size
+        except OSError:
+            return False
+    
+    def _check_files_multithread(
+        self, 
+        files: list[tuple[str, int]]  # List of (local_path, expected_size)
+    ) -> set[str]:
+        """
+        Check multiple local files in parallel using threadpool.
+        
+        Returns:
+            Set of local paths that exist and have matching size.
+        """
+        existing = set()
+        
+        if not files:
+            return existing
+        
+        # Use thread pool for parallel file stat
+        # Threads are ideal for I/O bound operations like file stat
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_to_path = {
+                executor.submit(self._check_local_file, path, size): path
+                for path, size in files
+            }
+            
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    if future.result():
+                        existing.add(path)
+                except Exception:
+                    pass
+        
+        return existing
     
     def analyze_folder(self, folder: MediaFolder) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze a folder to determine what needs to be synced.
+        Rsync-like: compares directly with local files.
         
         Args:
             folder: MediaFolder to analyze.
         
         Returns:
-            Tuple of (files_to_sync, already_synced)
+            Tuple of (files_to_sync, already_exist)
         """
         all_files = get_all_media_files(folder, self.device_serial)
         
-        to_sync = []
-        already_synced = []
-        
+        # Build list of files with their local paths
+        files_with_paths = []
         for file_info in all_files:
             remote_path = file_info['path']
-            
-            # Calculate local path maintaining folder structure
-            # Keep storage type distinction to avoid conflicts
-            relative_path = remote_path
-            if relative_path.startswith('/sdcard/'):
-                relative_path = 'internal/' + relative_path[8:]
-            elif relative_path.startswith('/storage/emulated/0/'):
-                relative_path = 'internal/' + relative_path[20:]
-            elif relative_path.startswith('/storage/'):
-                # SD card or other storage: /storage/XXXX-XXXX/... -> sdcard_XXXX-XXXX/...
-                parts = relative_path[9:].split('/', 1)
-                if len(parts) == 2:
-                    storage_name = parts[0]
-                    rest = parts[1]
-                    relative_path = f'sdcard_{storage_name}/{rest}'
-                else:
-                    relative_path = relative_path[1:]  # Remove leading /
-            
-            local_path = os.path.join(self.destination, relative_path)
-            
+            local_path = self._get_local_path(remote_path)
+            files_with_paths.append((file_info, local_path))
+        
+        # Check all files locally using multithread
+        files_to_check = [
+            (local_path, file_info['size'])
+            for file_info, local_path in files_with_paths
+        ]
+        
+        existing_paths = self._check_files_multithread(files_to_check)
+        
+        # Categorize files
+        to_sync = []
+        already_exist = []
+        
+        for file_info, local_path in files_with_paths:
             file_to_sync = FileToSync(
-                remote_path=remote_path,
+                remote_path=file_info['path'],
                 local_path=local_path,
                 size=file_info['size'],
                 mtime=file_info['mtime'],
-                needs_sync=True
+                needs_sync=local_path not in existing_paths
             )
             
-            # Check if already synced
-            if self.manifest.is_synced(remote_path, file_info['size'], file_info['mtime']):
-                file_to_sync.needs_sync = False
-                already_synced.append(file_to_sync)
-            else:
+            if file_to_sync.needs_sync:
                 to_sync.append(file_to_sync)
+            else:
+                already_exist.append(file_to_sync)
         
-        return to_sync, already_synced
+        return to_sync, already_exist
     
     def analyze_folders(self, folders: list[MediaFolder]) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze multiple folders.
         
         Returns:
-            Tuple of (all_files_to_sync, all_already_synced)
+            Tuple of (all_files_to_sync, all_already_exist)
         """
         all_to_sync = []
-        all_synced = []
+        all_exist = []
         
         for folder in folders:
-            to_sync, synced = self.analyze_folder(folder)
+            to_sync, exist = self.analyze_folder(folder)
             all_to_sync.extend(to_sync)
-            all_synced.extend(synced)
+            all_exist.extend(exist)
         
-        return all_to_sync, all_synced
+        return all_to_sync, all_exist
     
     def start_backup(
         self,
@@ -178,16 +227,16 @@ class BackupManager:
         self._cancelled = False
         
         # Analyze what needs to be synced
-        to_sync, already_synced = self.analyze_folders(folders)
+        to_sync, already_exist = self.analyze_folders(folders)
         
-        total_files = len(to_sync) + len(already_synced)
-        total_bytes = sum(f.size for f in to_sync) + sum(f.size for f in already_synced)
-        skipped_bytes = sum(f.size for f in already_synced)
+        total_files = len(to_sync) + len(already_exist)
+        total_bytes = sum(f.size for f in to_sync) + sum(f.size for f in already_exist)
+        skipped_bytes = sum(f.size for f in already_exist)
         
         progress = BackupProgress(
             total_files=total_files,
             completed_files=0,
-            skipped_files=len(already_synced),
+            skipped_files=len(already_exist),
             failed_files=0,
             current_file="",
             total_bytes=total_bytes,
@@ -222,19 +271,8 @@ class BackupManager:
                 )
                 
                 if success:
-                    # Add to manifest
-                    self.manifest.add_entry(
-                        file_to_sync.remote_path,
-                        file_to_sync.local_path,
-                        file_to_sync.size,
-                        file_to_sync.mtime
-                    )
                     progress.completed_files += 1
                     progress.completed_bytes += file_to_sync.size
-                    
-                    # Save manifest periodically (every 10 files)
-                    if progress.completed_files % 10 == 0:
-                        self.manifest.save()
                 else:
                     progress.failed_files += 1
                     
@@ -248,12 +286,10 @@ class BackupManager:
             if progress_callback:
                 progress_callback(progress)
         
-        # Final save
+        # Final status
         if not self._cancelled:
-            self.manifest.update_last_sync()
             progress.status = BackupStatus.COMPLETED
         
-        self.manifest.save()
         progress.current_file = ""
         
         if progress_callback:
@@ -266,5 +302,20 @@ class BackupManager:
         self._cancelled = True
     
     def get_sync_stats(self) -> dict:
-        """Get statistics about current sync state."""
-        return self.manifest.get_stats()
+        """Get statistics about backup destination."""
+        total_files = 0
+        total_size = 0
+        
+        for root, dirs, files in os.walk(self.destination):
+            for f in files:
+                total_files += 1
+                try:
+                    total_size += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+        
+        return {
+            'total_files': total_files,
+            'total_size': total_size,
+            'destination': self.destination
+        }
