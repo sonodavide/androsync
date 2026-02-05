@@ -109,38 +109,59 @@ def is_media_file(filename: str) -> tuple[bool, str]:
 def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     """
     Get all storage root paths on the device.
+    Avoids duplicates by resolving symlinks and checking real paths.
     
     Returns:
         Dict mapping storage path to storage type name.
     """
     roots = {}
+    seen_real_paths = set()
     
-    # Primary internal storage
+    # Primary internal storage - resolve the real path
+    internal_path = '/storage/emulated/0'
     try:
         output = shell_command('readlink -f /sdcard', device_serial)
         real_path = output.strip()
         if real_path:
-            roots[real_path] = "Interno"
+            internal_path = real_path
     except ADBError:
         pass
     
-    # Fallback for internal
-    if '/storage/emulated/0' not in roots:
-        roots['/storage/emulated/0'] = "Interno"
+    roots[internal_path] = "Interno"
+    seen_real_paths.add(internal_path)
     
     # Find external SD cards in /storage/
     try:
         output = shell_command('ls -1 /storage/ 2>/dev/null', device_serial)
         for line in output.strip().split('\n'):
             line = line.strip()
-            if line and line not in ['emulated', 'self']:
-                potential_path = f'/storage/{line}'
-                try:
-                    check = shell_command(f'[ -d "{potential_path}" ] && echo "ok"', device_serial)
-                    if 'ok' in check:
-                        roots[potential_path] = f"SD Card ({line})"
-                except ADBError:
-                    pass
+            if not line or line in ['emulated', 'self']:
+                continue
+            
+            potential_path = f'/storage/{line}'
+            
+            # Resolve to real path to avoid symlinks
+            try:
+                real_output = shell_command(f'readlink -f "{potential_path}" 2>/dev/null', device_serial)
+                real_path = real_output.strip()
+                if not real_path:
+                    real_path = potential_path
+            except ADBError:
+                real_path = potential_path
+            
+            # Skip if we've already seen this real path
+            if real_path in seen_real_paths:
+                continue
+            
+            # Check if it's a valid directory
+            try:
+                check = shell_command(f'[ -d "{potential_path}" ] && echo "ok"', device_serial)
+                if 'ok' in check:
+                    # Use the real path, name it by the visible name
+                    roots[potential_path] = f"SD Card ({line})"
+                    seen_real_paths.add(real_path)
+            except ADBError:
+                pass
     except ADBError:
         pass
     
