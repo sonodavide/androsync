@@ -1,92 +1,87 @@
-# Android Media Backup
+# AndroSync
 
-Applicazione Python per backup incrementali di foto e video da dispositivi Android tramite ADB.
+> 🤖 **DISCLAIMER**: This entire application was vibe-coded by Claude 4.5 Sonnet/Opus (Anthropic).
 
-## Caratteristiche
+**AndroSync** is a powerful, incremental backup tool for Android devices that supports multiple file categories including media, documents, APKs, and more. Built with Python and PyQt6, it provides both CLI and GUI interfaces for seamless device backup workflows.
 
-- **Backup incrementale**: Scarica solo i file nuovi o modificati (comportamento simile a rsync)
-- **Doppia interfaccia**: CLI interattiva e GUI con PyQt6
-- **Ripresa automatica**: Se il backup viene interrotto, riprende da dove era rimasto
-- **Scansione automatica**: Rileva automaticamente le cartelle con media sul dispositivo
-- **Progress bar**: Visualizza lo stato di avanzamento in tempo reale
+## ✨ Features
 
-## Requisiti
+- 📱 **Multi-Category Support**: Backup Media (photos/videos), Documents (PDF, Office files), APKs, or any other files
+- 🎯 **Smart Category Selection**: Choose exactly what to backup with an intuitive category picker
+- 💾 **Multi-Storage Detection**: Automatically detects internal storage, SD cards, and other mounted volumes
+- ⚡ **Incremental Sync**: Only transfers new or modified files (rsync-style)
+- 🖥️ **Dual Interface**: Modern PyQt6 GUI or powerful CLI for automation
+- 📊 **Detailed Statistics**: Real-time breakdown by file type (photos, videos, PDFs, etc.)
+- 📝 **Progress Tracking**: Visual progress bars and detailed logging
+
+## 🎯 Use Cases
+
+- Backup all your photos and videos before a factory reset
+- Extract APK files from your device for archival
+- Sync documents and work files to your computer
+- Create automated backup scripts via CLI
+- Backup everything except system files ("Other" category)
+
+## 📋 Requirements
 
 - Python 3.10+
-- ADB (Android Debug Bridge) installato e nel PATH
-- Dispositivo Android con debug USB attivo
+- Android Debug Bridge (ADB) installed and in PATH
+- Android device with USB debugging enabled
+- Linux, macOS, or Windows
 
-## Installazione
+## 🚀 Installation
 
 ```bash
-# Clona il repository
-git clone <repo-url>
-cd androidMediaBackup
+# Clone the repository
+git clone https://github.com/sonodavide/androsync.git
+cd androsync
 
-# Crea virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Installa dipendenze
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Utilizzo
+## 💻 Usage
 
-### GUI
+### GUI Mode (Recommended)
 
 ```bash
 python main_gui.py
 ```
 
-### CLI
+1. Connect your Android device via USB
+2. Enable USB debugging in Developer Options
+3. Click **"Seleziona Storage"** to choose which storage to scan
+4. Click **"Seleziona Categorie"** to pick file types (Media, Documents, APK, Other)
+5. Click **"Avvia Scansione"** to scan your device
+6. Select folders to backup from the tree view
+7. Choose destination folder and click **"Avvia Backup"**
+
+### CLI Mode
 
 ```bash
-# Modalita interattiva
 python main_cli.py
-
-# Specifica destinazione
-python main_cli.py -d ~/backup
-
-# Backup solo di cartelle specifiche
-python main_cli.py -d ~/backup -f DCIM Pictures
 ```
 
-## Struttura Progetto
+Follow the interactive prompts to:
+- Detect connected device
+- Scan for files
+- Select folders to backup
+- Choose destination path
+- Monitor backup progress
 
-```
-androidMediaBackup/
-├── main_cli.py          # Entry point CLI
-├── main_gui.py          # Entry point GUI
-├── core/                # Logica core condivisa
-│   ├── adb.py           # Wrapper ADB
-│   ├── scanner.py       # Scansione media
-│   ├── backup.py        # Gestione backup
-│   └── manifest.py      # Tracking file sincronizzati
-├── cli/                 # Interfaccia CLI
-│   └── app.py
-└── gui/                 # Interfaccia GUI
-    └── app.py
-```
+## 📂 File Categories
 
-## Come Funziona
+| Category | File Types |
+|----------|------------|
+| **Media** | Images (JPG, PNG, HEIC, RAW, etc.), Videos (MP4, MKV, AVI, MOV, etc.) |
+| **Documents** | PDF, Office files (Word, Excel, PowerPoint), Text files, Data files (JSON, XML, CSV) |
+| **APK** | Android application packages (.apk, .xapk, .apkm) |
+| **Other** | Everything else not in the above categories |
 
-1. L'app si connette al dispositivo tramite ADB
-2. Scansiona le cartelle media comuni (DCIM, Pictures, Movies, ecc.)
-3. Mostra le cartelle trovate con statistiche (numero file, dimensione)
-4. L'utente seleziona quali cartelle sincronizzare
-5. L'app confronta i file con il manifest locale per determinare cosa scaricare
-6. Scarica solo i file nuovi/modificati
-7. Aggiorna il manifest per le sessioni successive
 
-## Manifest
 
-Il file `.backup_manifest.json` nella cartella di destinazione tiene traccia dei file sincronizzati.
-Questo permette di:
-- Riprendere backup interrotti
-- Evitare di riscaricare file gia presenti
-- Rilevare file modificati sul dispositivo
 
-## Licenza
-
-MIT
