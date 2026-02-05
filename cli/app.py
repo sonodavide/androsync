@@ -105,6 +105,7 @@ def display_scan_results(result: ScanResult):
         table = Table(title="Cartelle Trovate", show_header=True, header_style="bold magenta")
         table.add_column("#", style="dim", width=4)
         table.add_column("Cartella", style="cyan")
+        table.add_column("Storage", style="yellow")
         table.add_column("Foto", justify="right")
         table.add_column("Video", justify="right")
         table.add_column("Totale", justify="right", style="bold")
@@ -114,6 +115,7 @@ def display_scan_results(result: ScanResult):
             table.add_row(
                 str(i),
                 folder.name,
+                folder.storage_type,
                 str(folder.photo_count),
                 str(folder.video_count),
                 str(folder.total_count),

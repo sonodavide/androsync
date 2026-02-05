@@ -24,6 +24,11 @@ SKIP_DIRECTORIES = {
     'lost+found',
 }
 
+# Directories to expand to show individual subfolders
+EXPAND_DIRECTORIES = {
+    'Android/media',  # Show individual app folders
+}
+
 
 @dataclass
 class MediaFolder:
@@ -33,6 +38,8 @@ class MediaFolder:
     photo_count: int = 0
     video_count: int = 0
     total_size: int = 0  # in bytes
+    storage_type: str = ""  # "Interno" or "SD Card" or "SD Card (name)"
+    storage_root: str = ""  # The storage root path
     subfolders: list['MediaFolder'] = field(default_factory=list)
     
     @property
@@ -106,27 +113,39 @@ def should_skip_directory(path: str) -> bool:
     return False
 
 
-def get_storage_roots(device_serial: Optional[str] = None) -> list[str]:
+def should_expand_directory(relative_path: str) -> bool:
+    """Check if a directory should be expanded to show subfolders."""
+    for expand in EXPAND_DIRECTORIES:
+        if relative_path == expand or relative_path.startswith(expand + '/'):
+            return True
+    return False
+
+
+def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     """
     Get all storage root paths on the device.
     
     Returns:
-        List of unique storage root paths.
+        Dict mapping storage path to storage type name.
     """
-    roots = set()
+    roots = {}
+    internal_path = None
     
     # Primary internal storage - /sdcard is usually a symlink
     try:
-        # Resolve /sdcard symlink to get real path
         output = shell_command('readlink -f /sdcard', device_serial)
         real_path = output.strip()
         if real_path:
-            roots.add(real_path)
+            internal_path = real_path
+            roots[real_path] = "Interno"
     except ADBError:
         pass
     
-    # Fallback to known paths
-    roots.add('/storage/emulated/0')
+    # Fallback for internal
+    if '/storage/emulated/0' not in roots:
+        roots['/storage/emulated/0'] = "Interno"
+        if internal_path is None:
+            internal_path = '/storage/emulated/0'
     
     # Find external SD cards and other storage in /storage/
     try:
@@ -139,13 +158,22 @@ def get_storage_roots(device_serial: Optional[str] = None) -> list[str]:
                 try:
                     check = shell_command(f'[ -d "{potential_path}" ] && echo "ok"', device_serial)
                     if 'ok' in check:
-                        roots.add(potential_path)
+                        # Name the SD card
+                        roots[potential_path] = f"SD Card ({line})"
                 except ADBError:
                     pass
     except ADBError:
         pass
     
-    return list(roots)
+    return roots
+
+
+def get_short_path(path: str, max_depth: int = 2) -> str:
+    """Get a shortened path showing only the last N directory levels."""
+    parts = path.strip('/').split('/')
+    if len(parts) <= max_depth:
+        return path
+    return '.../' + '/'.join(parts[-max_depth:])
 
 
 def scan_directory_recursive(
@@ -187,7 +215,9 @@ def scan_directory_recursive(
             subpath = file_info['path']
             if not should_skip_directory(subpath):
                 if progress_callback:
-                    progress_callback(subpath, 0, 0)
+                    # Show only short path (2 levels deep)
+                    short_path = get_short_path(subpath, 2)
+                    progress_callback(short_path, 0, 0)
                 sub_stats = scan_directory_recursive(
                     subpath, device_serial, max_depth, current_depth + 1, progress_callback
                 )
@@ -212,17 +242,19 @@ def scan_directory_recursive(
 def aggregate_to_top_level(
     folder_stats: dict[str, dict],
     storage_root: str,
+    storage_type: str,
     min_depth: int = 1
 ) -> list[MediaFolder]:
     """
     Aggregate folder statistics to top-level media folders.
     
     This groups media by their top-level parent folder under the storage root.
-    For example, all files under /sdcard/DCIM/* get grouped into a single 'DCIM' folder.
+    For Android/media, it expands to show individual app folders.
     
     Args:
         folder_stats: Dict from scan_directory_recursive
         storage_root: The storage root path (e.g., /storage/emulated/0)
+        storage_type: Human-readable storage type name
         min_depth: Minimum depth from root to consider as a "top-level" folder
     
     Returns:
@@ -239,7 +271,17 @@ def aggregate_to_top_level(
             relative = folder_path
         
         parts = relative.split('/')
-        if len(parts) >= min_depth:
+        
+        # Special handling for directories that should be expanded
+        if len(parts) >= 2 and should_expand_directory('/'.join(parts[:2])):
+            # Use first two directories (e.g., Android/media/com.whatsapp)
+            if len(parts) >= 3:
+                top_level = '/'.join(parts[:3])
+                top_level_path = f"{storage_root}/{top_level}"
+            else:
+                top_level = '/'.join(parts[:2])
+                top_level_path = f"{storage_root}/{top_level}"
+        elif len(parts) >= min_depth:
             # Use first directory as top-level
             top_level = parts[0]
             top_level_path = f"{storage_root}/{top_level}"
@@ -253,7 +295,9 @@ def aggregate_to_top_level(
     # Create MediaFolder for each top-level group
     folders = []
     for top_path, child_paths in top_level_groups.items():
-        name = top_path.rsplit('/', 1)[-1] or top_path
+        # Create display name
+        relative_to_root = top_path[len(storage_root):].lstrip('/') if top_path.startswith(storage_root) else top_path
+        name = relative_to_root or top_path.rsplit('/', 1)[-1]
         
         total_photos = 0
         total_videos = 0
@@ -270,7 +314,9 @@ def aggregate_to_top_level(
             name=name,
             photo_count=total_photos,
             video_count=total_videos,
-            total_size=total_size
+            total_size=total_size,
+            storage_type=storage_type,
+            storage_root=storage_root
         )
         folders.append(folder)
     
@@ -296,57 +342,38 @@ def scan_media_folders(
     Returns:
         ScanResult with all found media folders and totals.
     """
-    # Get all storage roots
+    # Get all storage roots with their types
     storage_roots = get_storage_roots(device_serial)
+    
     if additional_paths:
-        storage_roots.extend(additional_paths)
+        for path in additional_paths:
+            if path not in storage_roots:
+                storage_roots[path] = "Altro"
     
-    # Remove duplicates
-    storage_roots = list(set(storage_roots))
+    all_folders: list[MediaFolder] = []
     
-    all_folder_stats: dict[str, dict] = {}
-    
-    for root in storage_roots:
+    for root, storage_type in storage_roots.items():
         if progress_callback:
-            progress_callback(root, 0, len(storage_roots))
+            progress_callback(f"[{storage_type}]", 0, len(storage_roots))
         
         stats = scan_directory_recursive(
             root, device_serial, progress_callback=progress_callback
         )
-        all_folder_stats.update(stats)
-    
-    # Aggregate to top-level folders per storage root
-    all_folders: list[MediaFolder] = []
-    
-    for root in storage_roots:
-        # Filter stats for this root
-        root_stats = {k: v for k, v in all_folder_stats.items() if k.startswith(root)}
-        if root_stats:
-            folders = aggregate_to_top_level(root_stats, root)
+        
+        if stats:
+            folders = aggregate_to_top_level(stats, root, storage_type)
             all_folders.extend(folders)
     
-    # Merge folders with same name from different storage roots
-    merged: dict[str, MediaFolder] = {}
-    for folder in all_folders:
-        if folder.name in merged:
-            # Merge into existing
-            existing = merged[folder.name]
-            existing.photo_count += folder.photo_count
-            existing.video_count += folder.video_count
-            existing.total_size += folder.total_size
-        else:
-            merged[folder.name] = folder
-    
-    folders = list(merged.values())
-    folders.sort(key=lambda f: f.total_count, reverse=True)
+    # Sort by total count descending
+    all_folders.sort(key=lambda f: f.total_count, reverse=True)
     
     # Calculate totals
-    total_photos = sum(f.photo_count for f in folders)
-    total_videos = sum(f.video_count for f in folders)
-    total_size = sum(f.total_size for f in folders)
+    total_photos = sum(f.photo_count for f in all_folders)
+    total_videos = sum(f.video_count for f in all_folders)
+    total_size = sum(f.total_size for f in all_folders)
     
     return ScanResult(
-        folders=folders,
+        folders=all_folders,
         total_photos=total_photos,
         total_videos=total_videos,
         total_size=total_size

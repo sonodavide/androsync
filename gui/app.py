@@ -75,6 +75,27 @@ class BackupWorker(QThread):
             self.manager.cancel()
 
 
+class NumericTreeWidgetItem(QTreeWidgetItem):
+    """QTreeWidgetItem that sorts numeric columns correctly."""
+    
+    # Columns that contain numeric data (0-indexed)
+    NUMERIC_COLUMNS = {2, 3, 4, 5}  # Foto, Video, Totale, Dimensione
+    
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        column = self.treeWidget().sortColumn()
+        
+        if column in self.NUMERIC_COLUMNS:
+            # Get numeric data stored in UserRole
+            my_value = self.data(column, Qt.ItemDataRole.UserRole)
+            other_value = other.data(column, Qt.ItemDataRole.UserRole)
+            
+            if my_value is not None and other_value is not None:
+                return my_value < other_value
+        
+        # Fall back to string comparison
+        return self.text(column) < other.text(column)
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
     
@@ -185,10 +206,12 @@ class MainWindow(QMainWindow):
         
         # Tree widget
         self.folder_tree = QTreeWidget()
-        self.folder_tree.setHeaderLabels(["Cartella", "Foto", "Video", "Totale", "Dimensione"])
+        self.folder_tree.setHeaderLabels(["Cartella", "Storage", "Foto", "Video", "Totale", "Dimensione"])
         self.folder_tree.setRootIsDecorated(False)
         self.folder_tree.setAlternatingRowColors(False)
         self.folder_tree.itemChanged.connect(self.on_item_changed)
+        self.folder_tree.setSortingEnabled(True)
+        self.folder_tree.sortByColumn(4, Qt.SortOrder.DescendingOrder)  # Sort by total by default
         
         header = self.folder_tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -196,6 +219,9 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
         
         layout.addWidget(self.folder_tree)
         
@@ -382,7 +408,7 @@ class MainWindow(QMainWindow):
         self.scan_animation_dots = 0
         
         # Add scanning placeholder item
-        self.scanning_item = QTreeWidgetItem(["Scansione", "", "", "", ""])
+        self.scanning_item = QTreeWidgetItem(["Scansione", "", "", "", "", ""])
         self.scanning_item.setFlags(self.scanning_item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
         self.folder_tree.addTopLevelItem(self.scanning_item)
         
@@ -440,8 +466,9 @@ class MainWindow(QMainWindow):
         
         # Populate tree
         for folder in result.folders:
-            item = QTreeWidgetItem([
+            item = NumericTreeWidgetItem([
                 folder.name,
+                folder.storage_type,
                 str(folder.photo_count),
                 str(folder.video_count),
                 str(folder.total_count),
@@ -449,6 +476,11 @@ class MainWindow(QMainWindow):
             ])
             item.setCheckState(0, Qt.CheckState.Checked)
             item.setData(0, Qt.ItemDataRole.UserRole, folder)
+            # Store numeric values for proper sorting
+            item.setData(2, Qt.ItemDataRole.UserRole, folder.photo_count)
+            item.setData(3, Qt.ItemDataRole.UserRole, folder.video_count)
+            item.setData(4, Qt.ItemDataRole.UserRole, folder.total_count)
+            item.setData(5, Qt.ItemDataRole.UserRole, folder.total_size)
             self.folder_tree.addTopLevelItem(item)
         
         self.folder_tree.blockSignals(False)
