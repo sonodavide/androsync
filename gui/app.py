@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 from core.adb import check_adb_available, get_connected_devices, get_single_device, ADBError
-from core.scanner import scan_media_folders, MediaFolder, ScanResult, get_storage_roots
+from core.scanner import scan_media_folders, MediaFolder, ScanResult, get_storage_roots, FILE_CATEGORIES
 from core.backup import BackupManager, BackupProgress, BackupStatus
 
 
@@ -38,13 +38,15 @@ class ScanWorker(QThread):
     progress = pyqtSignal(str)  # Current folder being scanned
     error = pyqtSignal(str)
     
-    def __init__(self, storage_paths: dict[str, str]):
+    def __init__(self, storage_paths: dict[str, str], categories: list[str]):
         """
         Args:
             storage_paths: Dict mapping path -> display name to scan
+            categories: List of categories to scan
         """
         super().__init__()
         self.storage_paths = storage_paths
+        self.categories = categories
     
     def run(self):
         try:
@@ -53,6 +55,7 @@ class ScanWorker(QThread):
             
             result = scan_media_folders(
                 storage_paths=self.storage_paths,
+                categories=self.categories,
                 progress_callback=on_progress
             )
             self.finished.emit(result)
@@ -66,9 +69,10 @@ class BackupWorker(QThread):
     progress = pyqtSignal(object)  # BackupProgress
     finished = pyqtSignal(object)  # Final BackupProgress
     
-    def __init__(self, folders: list[MediaFolder], destination: str):
+    def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
         super().__init__()
         self.folders = folders
+        self.categories = categories
         self.destination = destination
         self.manager: Optional[BackupManager] = None
     
@@ -78,7 +82,11 @@ class BackupWorker(QThread):
         def on_progress(bp: BackupProgress):
             self.progress.emit(bp)
         
-        result = self.manager.start_backup(self.folders, progress_callback=on_progress)
+        result = self.manager.start_backup(
+            self.folders, 
+            categories=self.categories, 
+            progress_callback=on_progress
+        )
         self.finished.emit(result)
     
     def cancel(self):
@@ -165,6 +173,57 @@ class StorageSelectionDialog(QDialog):
         return selected
 
 
+class CategorySelectionDialog(QDialog):
+    """Dialog for selecting which file categories to scan."""
+    
+    def __init__(self, parent=None, selected_categories: list[str] = None):
+        super().__init__(parent)
+        self.selected_categories = selected_categories or ['media']
+        
+        self.setWindowTitle("Seleziona Categorie")
+        self.setMinimumWidth(300)
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        label = QLabel("Seleziona le categorie di file da scansionare:")
+        layout.addWidget(label)
+        
+        # List with checkboxes
+        self.list_widget = QListWidget()
+        for cat_id, cat_info in FILE_CATEGORIES.items():
+            item = QListWidgetItem(cat_info['name'])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            if cat_id in self.selected_categories:
+                item.setCheckState(Qt.CheckState.Checked)
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, cat_id)
+            self.list_widget.addItem(item)
+        
+        layout.addWidget(self.list_widget)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def get_selected_categories(self) -> list[str]:
+        """Return list of selected category IDs."""
+        selected = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                cat_id = item.data(Qt.ItemDataRole.UserRole)
+                selected.append(cat_id)
+        return selected
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
     
@@ -178,6 +237,7 @@ class MainWindow(QMainWindow):
         self.scan_animation_dots = 0
         self.available_storage: dict[str, str] = {}  # path -> name
         self.selected_storage: dict[str, str] = {}   # path -> name
+        self.selected_categories: list[str] = ['media']
         
         self.init_ui()
         self.check_device()
@@ -198,9 +258,9 @@ class MainWindow(QMainWindow):
         header = self.create_header()
         layout.addWidget(header)
         
-        # Storage selection panel
-        storage_panel = self.create_storage_panel()
-        layout.addWidget(storage_panel)
+        # Selection panel (Storage + Categories)
+        selection_panel = self.create_selection_panel()
+        layout.addWidget(selection_panel)
         
         # Splitter for main content
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -237,7 +297,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(frame)
         
         # Title
-        title = QLabel("Android Media Backup")
+        title = QLabel("Android Backup")
         title.setFont(QFont("", 16, QFont.Weight.Bold))
         layout.addWidget(title)
         
@@ -255,33 +315,70 @@ class MainWindow(QMainWindow):
         
         return frame
     
-    def create_storage_panel(self) -> QWidget:
-        """Create storage selection panel with button and selected list."""
+    def create_selection_panel(self) -> QWidget:
+        """Create selection panel for storage and categories."""
         frame = QFrame()
-        frame.setObjectName("storage_panel")
+        frame.setObjectName("selection_panel")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 8, 10, 8)
         
-        # Storage selection button
+        # Storage Selection
+        storage_layout = QVBoxLayout()
         self.storage_btn = QPushButton("Seleziona Storage")
         self.storage_btn.clicked.connect(self.open_storage_dialog)
-        self.storage_btn.setEnabled(False)  # Enabled after device check
-        layout.addWidget(self.storage_btn)
+        self.storage_btn.setEnabled(False)
+        storage_layout.addWidget(self.storage_btn)
         
-        # Selected storage label
-        self.storage_label = QLabel("Nessuno storage selezionato")
-        self.storage_label.setFont(QFont("", 11))
-        layout.addWidget(self.storage_label)
+        self.storage_label = QLabel("Nessuno")
+        self.storage_label.setFont(QFont("", 10))
+        self.storage_label.setStyleSheet("color: #888;")
+        storage_layout.addWidget(self.storage_label)
+        layout.addLayout(storage_layout)
+        
+        layout.addSpacing(20)
+        
+        # Category Selection
+        cat_layout = QVBoxLayout()
+        self.category_btn = QPushButton("Seleziona Categorie")
+        self.category_btn.clicked.connect(self.open_category_dialog)
+        cat_layout.addWidget(self.category_btn)
+        
+        self.category_label = QLabel("Media")
+        self.category_label.setFont(QFont("", 10))
+        self.category_label.setStyleSheet("color: #888;")
+        cat_layout.addWidget(self.category_label)
+        layout.addLayout(cat_layout)
         
         layout.addStretch()
         
         # Scan button
         self.scan_btn = QPushButton("Avvia Scansione")
+        self.scan_btn.setMinHeight(40)
         self.scan_btn.clicked.connect(self.scan_device)
-        self.scan_btn.setEnabled(False)  # Enabled after storage selection
+        self.scan_btn.setEnabled(False)
         layout.addWidget(self.scan_btn)
         
         return frame
+    
+    def open_category_dialog(self):
+        """Open dialog to select categories."""
+        dialog = CategorySelectionDialog(self, self.selected_categories)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.selected_categories = dialog.get_selected_categories()
+            self.update_category_label()
+    
+    def update_category_label(self):
+        """Update label with selected categories."""
+        if not self.selected_categories:
+            self.category_label.setText("Nessuna")
+            return
+            
+        names = [FILE_CATEGORIES[cat]['name'] for cat in self.selected_categories]
+        text = ", ".join(names)
+        # Truncate if too long
+        if len(text) > 30:
+            text = text[:27] + "..."
+        self.category_label.setText(text)
     
     def open_storage_dialog(self):
         """Open dialog to select storage."""
@@ -340,7 +437,7 @@ class MainWindow(QMainWindow):
         
         # Tree widget
         self.folder_tree = QTreeWidget()
-        self.folder_tree.setHeaderLabels(["Cartella", "Storage", "Foto", "Video", "Totale", "Dimensione"])
+        self.folder_tree.setHeaderLabels(["Cartella", "Storage", "File", "Dimensione"])
         self.folder_tree.setRootIsDecorated(False)
         self.folder_tree.setAlternatingRowColors(False)
         self.folder_tree.itemChanged.connect(self.on_item_changed)
@@ -352,8 +449,6 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         header.setSortIndicatorShown(True)
         header.setSectionsClickable(True)
         
@@ -587,8 +682,13 @@ class MainWindow(QMainWindow):
             self.log("ERRORE: Seleziona almeno uno storage da scansionare")
             return
         
+        if not self.selected_categories:
+            self.log("ERRORE: Seleziona almeno una categoria")
+            return
+        
         storage_names = ", ".join(self.selected_storage.values())
-        self.log(f"Scansione {storage_names} in corso...")
+        cat_names = ", ".join([FILE_CATEGORIES[c]['name'] for c in self.selected_categories])
+        self.log(f"Scansione {storage_names} for {cat_names}...")
         
         self.folder_tree.clear()
         self.backup_btn.setEnabled(False)
@@ -599,7 +699,7 @@ class MainWindow(QMainWindow):
         # Show scanning animation
         self.start_scan_animation()
         
-        self.scan_worker = ScanWorker(self.selected_storage)
+        self.scan_worker = ScanWorker(self.selected_storage, self.selected_categories)
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
@@ -625,25 +725,21 @@ class MainWindow(QMainWindow):
             item = NumericTreeWidgetItem([
                 folder.name,
                 folder.storage_type,
-                str(folder.photo_count),
-                str(folder.video_count),
-                str(folder.total_count),
+                str(folder.file_count),
                 folder.size_human()
             ])
             item.setCheckState(0, Qt.CheckState.Checked)
             item.setData(0, Qt.ItemDataRole.UserRole, folder)
             # Store numeric values for proper sorting
-            item.setData(2, Qt.ItemDataRole.UserRole, folder.photo_count)
-            item.setData(3, Qt.ItemDataRole.UserRole, folder.video_count)
-            item.setData(4, Qt.ItemDataRole.UserRole, folder.total_count)
-            item.setData(5, Qt.ItemDataRole.UserRole, folder.total_size)
+            item.setData(2, Qt.ItemDataRole.UserRole, folder.file_count)
+            item.setData(3, Qt.ItemDataRole.UserRole, folder.total_size)
             self.folder_tree.addTopLevelItem(item)
         
         self.folder_tree.blockSignals(False)
         
         # Update summary
         self.summary_label.setText(
-            f"Totale: {result.total_photos:,} foto, {result.total_videos:,} video ({result.size_human()})"
+            f"Totale: {result.total_media:,} file ({result.size_human()})"
         )
         
         # Re-enable controls
@@ -746,7 +842,7 @@ class MainWindow(QMainWindow):
         # Analyze first
         self.log("\nAnalisi file in corso...")
         manager = BackupManager(self.destination)
-        to_sync, already_synced = manager.analyze_folders(folders)
+        to_sync, already_synced = manager.analyze_folders(folders, self.selected_categories)
         
         sync_size = sum(f.size for f in already_synced)
         new_size = sum(f.size for f in to_sync)
@@ -784,7 +880,7 @@ class MainWindow(QMainWindow):
         self.select_all_checkbox.setEnabled(False)
         
         # Start worker
-        self.backup_worker = BackupWorker(folders, self.destination)
+        self.backup_worker = BackupWorker(folders, self.selected_categories, self.destination)
         self.backup_worker.progress.connect(self.on_backup_progress)
         self.backup_worker.finished.connect(self.on_backup_finished)
         self.backup_worker.start()

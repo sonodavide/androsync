@@ -1,6 +1,6 @@
 """
-Media Scanner Module
-Scans Android device for media folders and calculates statistics.
+File Scanner Module
+Scans Android device for files by category and calculates statistics.
 Uses fast find command instead of recursive ls for better performance.
 """
 
@@ -9,10 +9,64 @@ from typing import Optional
 from .adb import shell_command, find_media_files, ADBError
 
 
-# Media file extensions
+# File categories with their extensions
+FILE_CATEGORIES = {
+    'media': {
+        'name': 'Media',
+        'extensions': {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp', '.raw', '.cr2', '.nef', '.arw',
+                       '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.3gp', '.m4v'}
+    },
+    'documents': {
+        'name': 'Documenti',
+        'extensions': {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.odt', '.ods', '.odp', 
+                       '.rtf', '.csv', '.md', '.json', '.xml', '.html', '.htm'}
+    },
+    'apk': {
+        'name': 'APK',
+        'extensions': {'.apk', '.xapk', '.apkm'}
+    },
+    'other': {
+        'name': 'Altro',
+        'extensions': set()  # Special: matches everything not in other categories
+    }
+}
+
+# Legacy compatibility
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp', '.raw', '.cr2', '.nef', '.arw'}
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.3gp', '.m4v'}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+
+# All known extensions (for "other" category exclusion)
+ALL_KNOWN_EXTENSIONS = set()
+for cat in FILE_CATEGORIES.values():
+    ALL_KNOWN_EXTENSIONS |= cat['extensions']
+
+
+def get_extensions_for_categories(categories: list[str]) -> set[str]:
+    """Get combined extensions for selected categories."""
+    extensions = set()
+    include_other = False
+    
+    for cat in categories:
+        if cat == 'other':
+            include_other = True
+        elif cat in FILE_CATEGORIES:
+            extensions |= FILE_CATEGORIES[cat]['extensions']
+    
+    return extensions, include_other
+
+
+def is_file_in_categories(filename: str, categories: list[str]) -> bool:
+    """Check if a file matches any of the selected categories."""
+    ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    extensions, include_other = get_extensions_for_categories(categories)
+    
+    if ext in extensions:
+        return True
+    if include_other and ext not in ALL_KNOWN_EXTENSIONS:
+        return True
+    return False
+
 
 # Directories to skip during scan
 SKIP_DIRECTORIES = [
@@ -36,6 +90,7 @@ class MediaFolder:
     """Represents a folder containing media files."""
     path: str
     name: str
+    file_count: int = 0
     photo_count: int = 0
     video_count: int = 0
     total_size: int = 0
@@ -45,7 +100,7 @@ class MediaFolder:
     
     @property
     def total_count(self) -> int:
-        return self.photo_count + self.video_count
+        return self.file_count
     
     @property
     def size_mb(self) -> float:
@@ -68,16 +123,18 @@ class MediaFolder:
 
 
 @dataclass
+@dataclass
 class ScanResult:
     """Result of a media scan operation."""
     folders: list[MediaFolder]
     total_photos: int = 0
     total_videos: int = 0
+    total_files: int = 0
     total_size: int = 0
     
     @property
     def total_media(self) -> int:
-        return self.total_photos + self.total_videos
+        return self.total_files
     
     def size_human(self) -> str:
         """Return human-readable total size."""
@@ -221,19 +278,23 @@ def aggregate_files_to_folders(
         if top_level_path not in folder_stats:
             folder_stats[top_level_path] = {
                 'name': top_level,
+                'files': 0,
                 'photos': 0,
                 'videos': 0,
                 'size': 0
             }
         
-        # Categorize file
+        # Track total files
+        folder_stats[top_level_path]['files'] += 1
+        folder_stats[top_level_path]['size'] += file_info['size']
+        
+        # Categorize file for stats
         is_media, media_type = is_media_file(file_info['name'])
         if is_media:
             if media_type == 'photo':
                 folder_stats[top_level_path]['photos'] += 1
             else:
                 folder_stats[top_level_path]['videos'] += 1
-            folder_stats[top_level_path]['size'] += file_info['size']
     
     # Create MediaFolder objects
     folders = []
@@ -241,6 +302,7 @@ def aggregate_files_to_folders(
         folder = MediaFolder(
             path=path,
             name=stats['name'],
+            file_count=stats['files'],
             photo_count=stats['photos'],
             video_count=stats['videos'],
             total_size=stats['size'],
@@ -260,6 +322,7 @@ def scan_media_folders(
     scan_internal: bool = True,
     scan_sdcard: bool = True,
     storage_paths: Optional[dict[str, str]] = None,
+    categories: list[str] = None,
     additional_paths: Optional[list[str]] = None,
     progress_callback: Optional[callable] = None
 ) -> ScanResult:
@@ -272,6 +335,7 @@ def scan_media_folders(
         scan_internal: Whether to scan internal storage (ignored if storage_paths provided).
         scan_sdcard: Whether to scan SD card(s) (ignored if storage_paths provided).
         storage_paths: Dict mapping path -> name for specific paths to scan.
+        categories: List of categories to scan (default: ['media']).
         additional_paths: Additional paths to scan beyond auto-discovered storage.
         progress_callback: Optional callback(message, index, total) for progress.
     
@@ -301,6 +365,13 @@ def scan_media_folders(
     all_folders: list[MediaFolder] = []
     total_roots = len(storage_roots)
     
+    # Determine extensions to scan
+    categories = categories or ['media']
+    extensions, include_other = get_extensions_for_categories(categories)
+    
+    # If "other" is included, we need to scan everything
+    scan_extensions = {'*'} if include_other else extensions
+    
     for idx, (root, storage_type) in enumerate(storage_roots.items()):
         if progress_callback:
             progress_callback(f"Scansione {storage_type}...", idx, total_roots)
@@ -308,10 +379,18 @@ def scan_media_folders(
         # Use fast find command
         files = find_media_files(
             storage_root=root,
-            extensions=MEDIA_EXTENSIONS,
+            extensions=scan_extensions,
             device_serial=device_serial,
             exclude_patterns=SKIP_DIRECTORIES
         )
+        
+        # Filter files if needed (especially for "Other" category logic)
+        if files:
+            filtered_files = [
+                f for f in files 
+                if is_file_in_categories(f['name'], categories)
+            ]
+            files = filtered_files
         
         if progress_callback:
             progress_callback(f"Analisi {len(files)} file da {storage_type}...", idx, total_roots)
@@ -324,32 +403,50 @@ def scan_media_folders(
     all_folders.sort(key=lambda f: f.total_count, reverse=True)
     
     # Calculate totals
+    # Calculate totals
     total_photos = sum(f.photo_count for f in all_folders)
     total_videos = sum(f.video_count for f in all_folders)
+    total_files = sum(f.file_count for f in all_folders)
     total_size = sum(f.total_size for f in all_folders)
     
     return ScanResult(
         folders=all_folders,
         total_photos=total_photos,
         total_videos=total_videos,
+        total_files=total_files,
         total_size=total_size
     )
 
 
-def get_all_media_files(folder: MediaFolder, device_serial: Optional[str] = None) -> list[dict]:
+def get_all_media_files(
+    folder: MediaFolder, 
+    categories: list[str] = None,
+    device_serial: Optional[str] = None
+) -> list[dict]:
     """
     Get all media files from a folder using fast find command.
     
     Args:
         folder: MediaFolder to get files from.
+        categories: List of categories to find.
         device_serial: Optional device serial.
     
     Returns:
         List of file info dicts with path, size, mtime.
     """
-    return find_media_files(
+    categories = categories or ['media']
+    extensions, include_other = get_extensions_for_categories(categories)
+    scan_extensions = {'*'} if include_other else extensions
+    
+    files = find_media_files(
         storage_root=folder.path,
-        extensions=MEDIA_EXTENSIONS,
+        extensions=scan_extensions,
         device_serial=device_serial,
         exclude_patterns=SKIP_DIRECTORIES
     )
+    
+    # Filter files strictly
+    return [
+        f for f in files 
+        if is_file_in_categories(f['name'], categories)
+    ]

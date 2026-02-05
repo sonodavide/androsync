@@ -144,7 +144,7 @@ class BackupManager:
         
         return existing
     
-    def analyze_folder(self, folder: MediaFolder) -> tuple[list[FileToSync], list[FileToSync]]:
+    def analyze_folder(self, folder: MediaFolder, categories: list[str] = None) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze a folder to determine what needs to be synced.
         Rsync-like: compares directly with local files.
@@ -155,7 +155,7 @@ class BackupManager:
         Returns:
             Tuple of (files_to_sync, already_exist)
         """
-        all_files = get_all_media_files(folder, self.device_serial)
+        all_files = get_all_media_files(folder, categories, self.device_serial)
         
         # Build list of files with their local paths
         files_with_paths = []
@@ -192,7 +192,7 @@ class BackupManager:
         
         return to_sync, already_exist
     
-    def analyze_folders(self, folders: list[MediaFolder]) -> tuple[list[FileToSync], list[FileToSync]]:
+    def analyze_folders(self, folders: list[MediaFolder], categories: list[str] = None) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze multiple folders.
         
@@ -203,7 +203,7 @@ class BackupManager:
         all_exist = []
         
         for folder in folders:
-            to_sync, exist = self.analyze_folder(folder)
+            to_sync, exist = self.analyze_folder(folder, categories)
             all_to_sync.extend(to_sync)
             all_exist.extend(exist)
         
@@ -212,6 +212,7 @@ class BackupManager:
     def start_backup(
         self,
         folders: list[MediaFolder],
+        categories: list[str] = None,
         progress_callback: Optional[Callable[[BackupProgress], None]] = None
     ) -> BackupProgress:
         """
@@ -227,7 +228,7 @@ class BackupManager:
         self._cancelled = False
         
         # Analyze what needs to be synced
-        to_sync, already_exist = self.analyze_folders(folders)
+        to_sync, already_exist = self.analyze_folders(folders, categories)
         
         total_files = len(to_sync) + len(already_exist)
         total_bytes = sum(f.size for f in to_sync) + sum(f.size for f in already_exist)

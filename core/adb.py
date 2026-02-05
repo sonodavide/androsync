@@ -382,12 +382,15 @@ def find_media_files(
     """
     # Build find command with all extensions
     ext_conditions = []
-    for ext in extensions:
-        # Handle with and without dot
-        ext_clean = ext.lstrip('.')
-        ext_conditions.append(f'-iname "*.{ext_clean}"')
-    
-    ext_pattern = ' -o '.join(ext_conditions)
+    if not extensions or '*' in extensions:
+        ext_pattern = "-name '*'"  # Match all
+    else:
+        for ext in extensions:
+            # Handle with and without dot
+            ext_clean = ext.lstrip('.')
+            ext_conditions.append(f'-iname "*.{ext_clean}"')
+        
+        ext_pattern = ' -o '.join(ext_conditions)
     
     # Build exclude patterns
     exclude_cmd = ""
