@@ -56,6 +56,42 @@ def get_extensions_for_categories(categories: list[str]) -> set[str]:
     return extensions, include_other
 
 
+def get_file_subcategory(filename: str) -> str:
+    """Determine the display subcategory of a file."""
+    import os
+    ext = os.path.splitext(filename)[1].lower()
+    
+    # Photo
+    if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp', '.raw', '.cr2', '.nef', '.arw'}:
+        return 'Foto'
+    # Video
+    elif ext in {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.3gp', '.m4v'}:
+        return 'Video'
+    # PDF
+    elif ext == '.pdf':
+        return 'PDF'
+    # Word
+    elif ext in {'.doc', '.docx', '.odt'}:
+        return 'Word'
+    # Excel
+    elif ext in {'.xls', '.xlsx', '.ods'}:
+        return 'Excel'
+    # PowerPoint
+    elif ext in {'.ppt', '.pptx', '.odp'}:
+        return 'PowerPoint'
+    # Text
+    elif ext in {'.txt', '.md', '.log', '.rtf'}:
+        return 'Testo'
+    # APK
+    elif ext in {'.apk', '.xapk', '.apkm'}:
+        return 'APK'
+    # Code/Data
+    elif ext in {'.json', '.xml', '.html', '.htm', '.csv'}:
+        return 'Dati'
+    else:
+        return 'Altro'
+
+
 def is_file_in_categories(filename: str, categories: list[str]) -> bool:
     """Check if a file matches any of the selected categories."""
     ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
@@ -123,7 +159,6 @@ class MediaFolder:
 
 
 @dataclass
-@dataclass
 class ScanResult:
     """Result of a media scan operation."""
     folders: list[MediaFolder]
@@ -131,6 +166,7 @@ class ScanResult:
     total_videos: int = 0
     total_files: int = 0
     total_size: int = 0
+    file_stats: dict[str, int] = field(default_factory=dict)  # subcategory -> count
     
     @property
     def total_media(self) -> int:
@@ -364,6 +400,7 @@ def scan_media_folders(
     
     all_folders: list[MediaFolder] = []
     total_roots = len(storage_roots)
+    all_files_scanned = []  # Track all files for stats
     
     # Determine extensions to scan
     categories = categories or ['media']
@@ -391,6 +428,7 @@ def scan_media_folders(
                 if is_file_in_categories(f['name'], categories)
             ]
             files = filtered_files
+            all_files_scanned.extend(files)  # Track for stats
         
         if progress_callback:
             progress_callback(f"Analisi {len(files)} file da {storage_type}...", idx, total_roots)
@@ -402,19 +440,25 @@ def scan_media_folders(
     # Sort by total count descending
     all_folders.sort(key=lambda f: f.total_count, reverse=True)
     
-    # Calculate totals
-    # Calculate totals
+    # Calculate totals and file type statistics
     total_photos = sum(f.photo_count for f in all_folders)
     total_videos = sum(f.video_count for f in all_folders)
     total_files = sum(f.file_count for f in all_folders)
     total_size = sum(f.total_size for f in all_folders)
+    
+    # Calculate file type breakdown from all scanned files
+    file_stats = {}
+    for file_info in all_files_scanned:
+        subcat = get_file_subcategory(file_info['name'])
+        file_stats[subcat] = file_stats.get(subcat, 0) + 1
     
     return ScanResult(
         folders=all_folders,
         total_photos=total_photos,
         total_videos=total_videos,
         total_files=total_files,
-        total_size=total_size
+        total_size=total_size,
+        file_stats=file_stats
     )
 
 

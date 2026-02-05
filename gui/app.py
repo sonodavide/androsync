@@ -269,11 +269,15 @@ class MainWindow(QMainWindow):
         tree_container = self.create_folder_tree()
         splitter.addWidget(tree_container)
         
+        # Statistics panel
+        stats_panel = self.create_stats_panel()
+        splitter.addWidget(stats_panel)
+        
         # Log area
         log_container = self.create_log_area()
         splitter.addWidget(log_container)
         
-        splitter.setSizes([400, 200])
+        splitter.setSizes([400, 50, 200])
         layout.addWidget(splitter)
         
         # Progress bar
@@ -353,7 +357,7 @@ class MainWindow(QMainWindow):
         
         # Scan button
         self.scan_btn = QPushButton("Avvia Scansione")
-        self.scan_btn.setMinHeight(40)
+        self.scan_btn.setMinimumHeight(40)
         self.scan_btn.clicked.connect(self.scan_device)
         self.scan_btn.setEnabled(False)
         layout.addWidget(self.scan_btn)
@@ -460,6 +464,67 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.summary_label)
         
         return container
+    
+    def create_stats_panel(self) -> QWidget:
+        """Create statistics panel for file type breakdown."""
+        frame = QFrame()
+        frame.setObjectName("stats_panel")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(10, 5, 10, 5)
+        
+        # Title
+        title = QLabel("Statistiche")
+        title.setFont(QFont("", 10, QFont.Weight.Bold))
+        layout.addWidget(title)
+        
+        # Stats label (will be populated after scan)
+        self.stats_label = QLabel("Nessuna scansione effettuata")
+        self.stats_label.setFont(QFont("", 10))
+        self.stats_label.setWordWrap(True)
+        layout.addWidget(self.stats_label)
+        
+        return frame
+    
+    def update_stats_display(self, result):
+        """Update statistics display based on scan result and selected categories."""
+        if not result or not result.file_stats:
+            self.stats_label.setText("Nessun file trovato")
+            return
+        
+        # Map categories to relevant subcategories
+        category_subcats = {
+            'media': ['Foto', 'Video'],
+            'documents': ['PDF', 'Word', 'Excel', 'PowerPoint', 'Testo', 'Dati'],
+            'apk': ['APK'],
+            'other': ['Altro']
+        }
+        
+        # Collect relevant stats based on selected categories
+        stats_parts = []
+        for category in self.selected_categories:
+            subcats = category_subcats.get(category, [])
+            for subcat in subcats:
+                if subcat in result.file_stats:
+                    count = result.file_stats[subcat]
+                    # Add emoji for visual appeal
+                    emoji = {
+                        'Foto': '📷',
+                        'Video': '🎥',
+                        'PDF': '📄',
+                        'Word': '📝',
+                        'Excel': '📊',
+                        'PowerPoint': '📽️',
+                        'Testo': '📃',
+                        'APK': '📦',
+                        'Dati': '💾',
+                        'Altro': '📁'
+                    }.get(subcat, '📄')
+                    stats_parts.append(f"{emoji} {subcat}: {count:,}")
+        
+        if stats_parts:
+            self.stats_label.setText("  |  ".join(stats_parts))
+        else:
+            self.stats_label.setText("Nessun file nelle categorie selezionate")
     
     def create_log_area(self) -> QWidget:
         """Create log text area."""
@@ -741,6 +806,9 @@ class MainWindow(QMainWindow):
         self.summary_label.setText(
             f"Totale: {result.total_media:,} file ({result.size_human()})"
         )
+        
+        # Update statistics display
+        self.update_stats_display(result)
         
         # Re-enable controls
         self.select_all_checkbox.setEnabled(True)
