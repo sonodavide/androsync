@@ -1,20 +1,20 @@
 """
 GUI Application Module
-PyQt6-based graphical interface for Android Media Backup.
+PySide6-based graphical interface for Android Media Backup.
 """
 
 import os
 import sys
 from typing import Optional
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QProgressBar,
     QTextEdit, QFileDialog, QMessageBox, QFrame, QSplitter, QHeaderView,
     QCheckBox, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QFont, QIcon
 
 from core.adb import check_adb_available, get_connected_devices, get_single_device, ADBError
 from core.scanner import scan_media_folders, MediaFolder, ScanResult, get_storage_roots, FILE_CATEGORIES
@@ -34,9 +34,9 @@ def format_size(size_bytes: int) -> str:
 
 class ScanWorker(QThread):
     """Worker thread for scanning device."""
-    finished = pyqtSignal(object)  # ScanResult or None
-    progress = pyqtSignal(str)  # Current folder being scanned
-    error = pyqtSignal(str)
+    finished = Signal(object)  # ScanResult or None
+    progress = Signal(str)  # Current folder being scanned
+    error = Signal(str)
     
     def __init__(self, storage_paths: dict[str, str], categories: list[str]):
         """
@@ -66,8 +66,8 @@ class ScanWorker(QThread):
 
 class BackupWorker(QThread):
     """Worker thread for backup operation."""
-    progress = pyqtSignal(object)  # BackupProgress
-    finished = pyqtSignal(object)  # Final BackupProgress
+    progress = Signal(object)  # BackupProgress
+    finished = Signal(object)  # Final BackupProgress
     
     def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
         super().__init__()
