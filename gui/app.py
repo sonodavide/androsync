@@ -38,12 +38,21 @@ class ScanWorker(QThread):
     progress = pyqtSignal(str)  # Current folder being scanned
     error = pyqtSignal(str)
     
+    def __init__(self, scan_internal: bool = True, scan_sdcard: bool = True):
+        super().__init__()
+        self.scan_internal = scan_internal
+        self.scan_sdcard = scan_sdcard
+    
     def run(self):
         try:
             def on_progress(path: str, index: int, total: int):
                 self.progress.emit(f"Scansione: {path}")
             
-            result = scan_media_folders(progress_callback=on_progress)
+            result = scan_media_folders(
+                scan_internal=self.scan_internal,
+                scan_sdcard=self.scan_sdcard,
+                progress_callback=on_progress
+            )
             self.finished.emit(result)
         except ADBError as e:
             self.error.emit(str(e))
@@ -127,6 +136,10 @@ class MainWindow(QMainWindow):
         header = self.create_header()
         layout.addWidget(header)
         
+        # Storage selection panel
+        storage_panel = self.create_storage_panel()
+        layout.addWidget(storage_panel)
+        
         # Splitter for main content
         splitter = QSplitter(Qt.Orientation.Vertical)
         
@@ -177,6 +190,38 @@ class MainWindow(QMainWindow):
         refresh_btn = QPushButton("Aggiorna")
         refresh_btn.clicked.connect(self.check_device)
         layout.addWidget(refresh_btn)
+        
+        return frame
+    
+    def create_storage_panel(self) -> QWidget:
+        """Create storage selection panel."""
+        frame = QFrame()
+        frame.setObjectName("storage_panel")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(10, 8, 10, 8)
+        
+        # Label
+        label = QLabel("Storage da scansionare:")
+        label.setFont(QFont("", 11))
+        layout.addWidget(label)
+        
+        # Internal storage checkbox
+        self.internal_checkbox = QCheckBox("Interno")
+        self.internal_checkbox.setChecked(True)
+        layout.addWidget(self.internal_checkbox)
+        
+        # SD Card checkbox
+        self.sdcard_checkbox = QCheckBox("SD Card")
+        self.sdcard_checkbox.setChecked(False)
+        layout.addWidget(self.sdcard_checkbox)
+        
+        layout.addStretch()
+        
+        # Scan button
+        self.scan_btn = QPushButton("Avvia Scansione")
+        self.scan_btn.clicked.connect(self.scan_device)
+        self.scan_btn.setEnabled(False)  # Enabled after device check
+        layout.addWidget(self.scan_btn)
         
         return frame
     
@@ -366,6 +411,7 @@ class MainWindow(QMainWindow):
         self.folder_tree.clear()
         self.summary_label.setText("")
         self.select_all_checkbox.setEnabled(False)
+        self.scan_btn.setEnabled(False)
         
         # Check ADB
         if not check_adb_available():
@@ -395,8 +441,9 @@ class MainWindow(QMainWindow):
             self.device_label.setText(f"[OK] {device.model}")
             self.log(f"[OK] Dispositivo connesso: {device.model} ({device.serial})")
             
-            # Start scanning
-            self.scan_device()
+            # Enable scan button - user can choose storage and start scan
+            self.scan_btn.setEnabled(True)
+            self.log("Seleziona lo storage da scansionare e premi 'Avvia Scansione'")
             
         except ADBError as e:
             self.device_label.setText("[ERRORE] ADB")
@@ -435,15 +482,31 @@ class MainWindow(QMainWindow):
     
     def scan_device(self):
         """Start device scan in background."""
-        self.log("Scansione dispositivo in corso...")
+        scan_internal = self.internal_checkbox.isChecked()
+        scan_sdcard = self.sdcard_checkbox.isChecked()
+        
+        if not scan_internal and not scan_sdcard:
+            self.log("ERRORE: Seleziona almeno uno storage da scansionare")
+            return
+        
+        storage_msg = []
+        if scan_internal:
+            storage_msg.append("Interno")
+        if scan_sdcard:
+            storage_msg.append("SD Card")
+        
+        self.log(f"Scansione {' + '.join(storage_msg)} in corso...")
         self.folder_tree.clear()
         self.backup_btn.setEnabled(False)
         self.select_all_checkbox.setEnabled(False)
+        self.scan_btn.setEnabled(False)
+        self.internal_checkbox.setEnabled(False)
+        self.sdcard_checkbox.setEnabled(False)
         
         # Show scanning animation
         self.start_scan_animation()
         
-        self.scan_worker = ScanWorker()
+        self.scan_worker = ScanWorker(scan_internal, scan_sdcard)
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
@@ -490,9 +553,12 @@ class MainWindow(QMainWindow):
             f"Totale: {result.total_photos:,} foto, {result.total_videos:,} video ({result.size_human()})"
         )
         
-        # Enable select all checkbox
+        # Re-enable controls
         self.select_all_checkbox.setEnabled(True)
         self.select_all_checkbox.setChecked(True)
+        self.scan_btn.setEnabled(True)
+        self.internal_checkbox.setEnabled(True)
+        self.sdcard_checkbox.setEnabled(True)
         self.update_backup_button()
     
     def on_select_all_changed(self, state: int):

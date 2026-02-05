@@ -236,15 +236,19 @@ def aggregate_files_to_folders(
 
 def scan_media_folders(
     device_serial: Optional[str] = None,
+    scan_internal: bool = True,
+    scan_sdcard: bool = True,
     additional_paths: Optional[list[str]] = None,
     progress_callback: Optional[callable] = None
 ) -> ScanResult:
     """
-    Scan all storage for media folders on the device.
+    Scan selected storage for media folders on the device.
     Uses fast find command for much better performance.
     
     Args:
         device_serial: Optional device serial.
+        scan_internal: Whether to scan internal storage.
+        scan_sdcard: Whether to scan SD card(s).
         additional_paths: Additional paths to scan beyond auto-discovered storage.
         progress_callback: Optional callback(message, index, total) for progress.
     
@@ -252,7 +256,15 @@ def scan_media_folders(
         ScanResult with all found media folders and totals.
     """
     # Get all storage roots with their types
-    storage_roots = get_storage_roots(device_serial)
+    all_roots = get_storage_roots(device_serial)
+    
+    # Filter based on selection
+    storage_roots = {}
+    for path, storage_type in all_roots.items():
+        if storage_type == "Interno" and scan_internal:
+            storage_roots[path] = storage_type
+        elif storage_type.startswith("SD Card") and scan_sdcard:
+            storage_roots[path] = storage_type
     
     if additional_paths:
         for path in additional_paths:

@@ -43,6 +43,26 @@ Esempi:
     )
     
     parser.add_argument(
+        '--internal',
+        action='store_true',
+        default=True,
+        help='Scansiona storage interno (default: attivo)'
+    )
+    
+    parser.add_argument(
+        '--sdcard',
+        action='store_true',
+        default=False,
+        help='Scansiona SD card'
+    )
+    
+    parser.add_argument(
+        '--no-internal',
+        action='store_true',
+        help='Non scansionare storage interno'
+    )
+    
+    parser.add_argument(
         '-v', '--version',
         action='version',
         version='%(prog)s 1.0.0'
@@ -50,11 +70,16 @@ Esempi:
     
     args = parser.parse_args()
     
+    # Handle internal storage flag
+    scan_internal = not args.no_internal
+    
     try:
         run_cli(
             destination=args.destination,
             selected_folders=args.folders,
-            select_all=args.select_all
+            select_all=args.select_all,
+            scan_internal=scan_internal,
+            scan_sdcard=args.sdcard
         )
     except KeyboardInterrupt:
         print("\n\nInterrotto dall'utente.")

@@ -67,9 +67,15 @@ def check_prerequisites() -> bool:
         return False
 
 
-def scan_device() -> Optional[ScanResult]:
+def scan_device(scan_internal: bool = True, scan_sdcard: bool = False) -> Optional[ScanResult]:
     """Scan device for media folders."""
-    console.print("\n[bold]Scansione dispositivo...[/]")
+    storage_msg = []
+    if scan_internal:
+        storage_msg.append("interno")
+    if scan_sdcard:
+        storage_msg.append("SD card")
+    
+    console.print(f"\n[bold]Scansione {' + '.join(storage_msg)}...[/]")
     
     with Progress(
         SpinnerColumn(),
@@ -82,7 +88,11 @@ def scan_device() -> Optional[ScanResult]:
             progress.update(task, description=f"Scansione: {path}")
         
         try:
-            result = scan_media_folders(progress_callback=on_progress)
+            result = scan_media_folders(
+                scan_internal=scan_internal,
+                scan_sdcard=scan_sdcard,
+                progress_callback=on_progress
+            )
             return result
         except ADBError as e:
             console.print(f"[bold red]ERRORE durante la scansione:[/] {e}", style="red")
@@ -243,7 +253,13 @@ def run_backup(folders: list[MediaFolder], destination: str):
             console.print("[dim]I progressi sono stati salvati. Riavvia per riprendere.[/]")
 
 
-def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[str]] = None, select_all: bool = False):
+def run_cli(
+    destination: Optional[str] = None, 
+    selected_folders: Optional[list[str]] = None, 
+    select_all: bool = False,
+    scan_internal: bool = True,
+    scan_sdcard: bool = False
+):
     """
     Main CLI entry point.
     
@@ -251,6 +267,8 @@ def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[s
         destination: Optional preset destination path.
         selected_folders: Optional list of folder names to backup.
         select_all: If True, automatically select all folders.
+        scan_internal: Whether to scan internal storage.
+        scan_sdcard: Whether to scan SD card.
     """
     console.print(Panel.fit(
         "[bold cyan]Android Media Backup[/]\n[dim]Backup incrementale dei media via ADB[/]",
@@ -262,7 +280,7 @@ def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[s
         sys.exit(1)
     
     # Scan device
-    result = scan_device()
+    result = scan_device(scan_internal=scan_internal, scan_sdcard=scan_sdcard)
     if not result:
         sys.exit(1)
     
