@@ -10,7 +10,8 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QProgressBar,
-    QTextEdit, QFileDialog, QMessageBox, QFrame, QSplitter, QHeaderView
+    QTextEdit, QFileDialog, QMessageBox, QFrame, QSplitter, QHeaderView,
+    QCheckBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
@@ -82,6 +83,9 @@ class MainWindow(QMainWindow):
         self.scan_result: Optional[ScanResult] = None
         self.destination: Optional[str] = None
         self.backup_worker: Optional[BackupWorker] = None
+        self.is_scanning = False
+        self.scan_animation_timer: Optional[QTimer] = None
+        self.scan_animation_dots = 0
         
         self.init_ui()
         self.check_device()
@@ -161,16 +165,30 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Label
+        # Header with label and select all checkbox
+        header_layout = QHBoxLayout()
+        
         label = QLabel("Cartelle Media")
         label.setFont(QFont("", 12, QFont.Weight.Bold))
-        layout.addWidget(label)
+        header_layout.addWidget(label)
+        
+        header_layout.addStretch()
+        
+        # Select all checkbox
+        self.select_all_checkbox = QCheckBox("Seleziona tutto")
+        self.select_all_checkbox.setChecked(True)
+        self.select_all_checkbox.stateChanged.connect(self.on_select_all_changed)
+        self.select_all_checkbox.setEnabled(False)
+        header_layout.addWidget(self.select_all_checkbox)
+        
+        layout.addLayout(header_layout)
         
         # Tree widget
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderLabels(["Cartella", "Foto", "Video", "Totale", "Dimensione"])
         self.folder_tree.setRootIsDecorated(False)
-        self.folder_tree.setAlternatingRowColors(True)
+        self.folder_tree.setAlternatingRowColors(False)
+        self.folder_tree.itemChanged.connect(self.on_item_changed)
         
         header = self.folder_tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -222,12 +240,6 @@ class MainWindow(QMainWindow):
         
         layout.addStretch()
         
-        # Select all button
-        self.select_all_btn = QPushButton("Seleziona Tutto")
-        self.select_all_btn.clicked.connect(self.toggle_select_all)
-        self.select_all_btn.setEnabled(False)
-        layout.addWidget(self.select_all_btn)
-        
         # Backup button
         self.backup_btn = QPushButton("Avvia Backup")
         self.backup_btn.clicked.connect(self.start_backup)
@@ -269,9 +281,6 @@ class MainWindow(QMainWindow):
             QTreeWidget::item:selected {
                 background-color: #3d3d3d;
             }
-            QTreeWidget::item:checked {
-                background-color: #1a3a1a;
-            }
             QTextEdit {
                 background-color: #1a1a1a;
                 border: 1px solid #3d3d3d;
@@ -309,6 +318,13 @@ class MainWindow(QMainWindow):
                 border: none;
                 padding: 5px;
             }
+            QCheckBox {
+                spacing: 5px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
         """)
     
     def log(self, message: str):
@@ -323,6 +339,7 @@ class MainWindow(QMainWindow):
         self.device_label.setText("Ricerca dispositivo...")
         self.folder_tree.clear()
         self.summary_label.setText("")
+        self.select_all_checkbox.setEnabled(False)
         
         # Check ADB
         if not check_adb_available():
@@ -359,12 +376,46 @@ class MainWindow(QMainWindow):
             self.device_label.setText("[ERRORE] ADB")
             self.log(f"ERRORE ADB: {e}")
     
+    def start_scan_animation(self):
+        """Start the scanning animation in the tree."""
+        self.is_scanning = True
+        self.scan_animation_dots = 0
+        
+        # Add scanning placeholder item
+        self.scanning_item = QTreeWidgetItem(["Scansione", "", "", "", ""])
+        self.scanning_item.setFlags(self.scanning_item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+        self.folder_tree.addTopLevelItem(self.scanning_item)
+        
+        # Start animation timer
+        self.scan_animation_timer = QTimer()
+        self.scan_animation_timer.timeout.connect(self.update_scan_animation)
+        self.scan_animation_timer.start(500)  # Update every 500ms
+    
+    def update_scan_animation(self):
+        """Update the scanning animation."""
+        if not self.is_scanning:
+            return
+        
+        self.scan_animation_dots = (self.scan_animation_dots + 1) % 4
+        dots = "." * self.scan_animation_dots
+        self.scanning_item.setText(0, f"Scansione{dots}")
+    
+    def stop_scan_animation(self):
+        """Stop the scanning animation."""
+        self.is_scanning = False
+        if self.scan_animation_timer:
+            self.scan_animation_timer.stop()
+            self.scan_animation_timer = None
+    
     def scan_device(self):
         """Start device scan in background."""
         self.log("Scansione dispositivo in corso...")
         self.folder_tree.clear()
-        self.select_all_btn.setEnabled(False)
         self.backup_btn.setEnabled(False)
+        self.select_all_checkbox.setEnabled(False)
+        
+        # Show scanning animation
+        self.start_scan_animation()
         
         self.scan_worker = ScanWorker()
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
@@ -374,6 +425,8 @@ class MainWindow(QMainWindow):
     
     def on_scan_finished(self, result: Optional[ScanResult]):
         """Handle scan completion."""
+        self.stop_scan_animation()
+        self.folder_tree.clear()
         self.scan_result = result
         
         if not result or not result.folders:
@@ -381,6 +434,9 @@ class MainWindow(QMainWindow):
             return
         
         self.log(f"[OK] Scansione completata: {result.total_media:,} file trovati")
+        
+        # Block signals while populating
+        self.folder_tree.blockSignals(True)
         
         # Populate tree
         for folder in result.folders:
@@ -395,29 +451,60 @@ class MainWindow(QMainWindow):
             item.setData(0, Qt.ItemDataRole.UserRole, folder)
             self.folder_tree.addTopLevelItem(item)
         
+        self.folder_tree.blockSignals(False)
+        
         # Update summary
         self.summary_label.setText(
             f"Totale: {result.total_photos:,} foto, {result.total_videos:,} video ({result.size_human()})"
         )
         
-        self.select_all_btn.setEnabled(True)
+        # Enable select all checkbox
+        self.select_all_checkbox.setEnabled(True)
+        self.select_all_checkbox.setChecked(True)
         self.update_backup_button()
     
-    def toggle_select_all(self):
-        """Toggle selection of all folders."""
-        # Check if any are unchecked
-        any_unchecked = False
-        for i in range(self.folder_tree.topLevelItemCount()):
-            item = self.folder_tree.topLevelItem(i)
-            if item.checkState(0) == Qt.CheckState.Unchecked:
-                any_unchecked = True
-                break
+    def on_select_all_changed(self, state: int):
+        """Handle select all checkbox change."""
+        self.folder_tree.blockSignals(True)
         
-        # Set all to opposite state
-        new_state = Qt.CheckState.Checked if any_unchecked else Qt.CheckState.Unchecked
+        new_state = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
         for i in range(self.folder_tree.topLevelItemCount()):
             item = self.folder_tree.topLevelItem(i)
             item.setCheckState(0, new_state)
+        
+        self.folder_tree.blockSignals(False)
+        self.update_backup_button()
+    
+    def on_item_changed(self, item: QTreeWidgetItem, column: int):
+        """Handle tree item change to update select all checkbox state."""
+        if column != 0:
+            return
+        
+        # Check if all items are checked, unchecked, or mixed
+        all_checked = True
+        all_unchecked = True
+        
+        for i in range(self.folder_tree.topLevelItemCount()):
+            item = self.folder_tree.topLevelItem(i)
+            if item.checkState(0) == Qt.CheckState.Checked:
+                all_unchecked = False
+            else:
+                all_checked = False
+        
+        # Update checkbox without triggering its signal
+        self.select_all_checkbox.blockSignals(True)
+        if all_checked:
+            self.select_all_checkbox.setChecked(True)
+        elif all_unchecked:
+            self.select_all_checkbox.setChecked(False)
+        else:
+            self.select_all_checkbox.setTristate(True)
+            self.select_all_checkbox.setCheckState(Qt.CheckState.PartiallyChecked)
+        self.select_all_checkbox.blockSignals(False)
+        
+        # Reset tristate after setting
+        if all_checked or all_unchecked:
+            self.select_all_checkbox.setTristate(False)
         
         self.update_backup_button()
     
@@ -504,7 +591,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximum(len(to_sync) + len(already_synced))
         self.progress_bar.setValue(len(already_synced))
         self.dest_btn.setEnabled(False)
-        self.select_all_btn.setEnabled(False)
+        self.select_all_checkbox.setEnabled(False)
         
         # Start worker
         self.backup_worker = BackupWorker(folders, self.destination)
@@ -529,7 +616,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.hide()
         self.progress_bar.hide()
         self.dest_btn.setEnabled(True)
-        self.select_all_btn.setEnabled(True)
+        self.select_all_checkbox.setEnabled(True)
         
         if progress.status == BackupStatus.COMPLETED:
             self.log(f"\n[OK] Backup completato!")

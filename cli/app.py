@@ -241,13 +241,14 @@ def run_backup(folders: list[MediaFolder], destination: str):
             console.print("[dim]I progressi sono stati salvati. Riavvia per riprendere.[/]")
 
 
-def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[str]] = None):
+def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[str]] = None, select_all: bool = False):
     """
     Main CLI entry point.
     
     Args:
         destination: Optional preset destination path.
         selected_folders: Optional list of folder names to backup.
+        select_all: If True, automatically select all folders.
     """
     console.print(Panel.fit(
         "[bold cyan]Android Media Backup[/]\n[dim]Backup incrementale dei media via ADB[/]",
@@ -271,7 +272,11 @@ def run_cli(destination: Optional[str] = None, selected_folders: Optional[list[s
     display_scan_results(result)
     
     # Select folders
-    if selected_folders:
+    if select_all:
+        # Automatically select all folders
+        folders = result.folders
+        console.print(f"\n[green][OK][/] Selezionate tutte le {len(folders)} cartelle")
+    elif selected_folders:
         # Filter by name if provided
         folders = [f for f in result.folders if f.name in selected_folders]
         if not folders:

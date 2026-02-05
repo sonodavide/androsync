@@ -36,6 +36,13 @@ Esempi:
     )
     
     parser.add_argument(
+        '-a', '--all',
+        action='store_true',
+        dest='select_all',
+        help='Seleziona automaticamente tutte le cartelle'
+    )
+    
+    parser.add_argument(
         '-v', '--version',
         action='version',
         version='%(prog)s 1.0.0'
@@ -46,7 +53,8 @@ Esempi:
     try:
         run_cli(
             destination=args.destination,
-            selected_folders=args.folders
+            selected_folders=args.folders,
+            select_all=args.select_all
         )
     except KeyboardInterrupt:
         print("\n\nInterrotto dall'utente.")

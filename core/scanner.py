@@ -10,6 +10,7 @@ from .adb import shell_command, list_files, ADBError
 
 # Common media directories on Android
 MEDIA_DIRECTORIES = [
+    # Internal storage
     "/sdcard/DCIM",
     "/sdcard/Pictures", 
     "/sdcard/Movies",
@@ -17,6 +18,26 @@ MEDIA_DIRECTORIES = [
     "/sdcard/WhatsApp/Media",
     "/sdcard/Telegram",
     "/sdcard/Screenshots",
+    "/sdcard/Android/media",
+    "/sdcard/Music",
+    "/sdcard/Video",
+    "/sdcard/Photo",
+    "/sdcard/Camera",
+    # Alternative internal storage paths
+    "/storage/emulated/0/DCIM",
+    "/storage/emulated/0/Pictures",
+    "/storage/emulated/0/Movies",
+    "/storage/emulated/0/Download",
+    "/storage/emulated/0/Android/media",
+]
+
+# SD Card paths to check (will be dynamically discovered)
+SD_CARD_PATTERNS = [
+    "/storage/sdcard1",
+    "/storage/extSdCard",
+    "/storage/external_sd",
+    "/mnt/extSdCard",
+    "/mnt/sdcard/external_sd",
 ]
 
 # Media file extensions
@@ -150,6 +171,39 @@ def scan_folder(path: str, device_serial: Optional[str] = None, recursive: bool 
     return folder
 
 
+def discover_sd_cards(device_serial: Optional[str] = None) -> list[str]:
+    """
+    Discover SD card mount points on the device.
+    
+    Returns:
+        List of SD card paths that exist on the device.
+    """
+    sd_paths = []
+    
+    # Check known SD card patterns
+    for pattern in SD_CARD_PATTERNS:
+        try:
+            output = shell_command(f'[ -d "{pattern}" ] && echo "exists"', device_serial)
+            if 'exists' in output:
+                sd_paths.append(pattern)
+        except ADBError:
+            pass
+    
+    # Also try to find SD cards in /storage/
+    try:
+        output = shell_command('ls -1 /storage/ 2>/dev/null', device_serial)
+        for line in output.strip().split('\n'):
+            line = line.strip()
+            if line and line not in ['emulated', 'self']:
+                potential_path = f'/storage/{line}'
+                if potential_path not in sd_paths:
+                    sd_paths.append(potential_path)
+    except ADBError:
+        pass
+    
+    return sd_paths
+
+
 def scan_media_folders(
     device_serial: Optional[str] = None,
     additional_paths: Optional[list[str]] = None,
@@ -169,6 +223,24 @@ def scan_media_folders(
     paths_to_scan = MEDIA_DIRECTORIES.copy()
     if additional_paths:
         paths_to_scan.extend(additional_paths)
+    
+    # Discover and add SD card paths
+    sd_cards = discover_sd_cards(device_serial)
+    for sd_path in sd_cards:
+        # Add common media folders on SD card
+        for subdir in ['DCIM', 'Pictures', 'Movies', 'Download', 'Camera', 'Video', 'Photo']:
+            full_path = f"{sd_path}/{subdir}"
+            if full_path not in paths_to_scan:
+                paths_to_scan.append(full_path)
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_paths = []
+    for path in paths_to_scan:
+        if path not in seen:
+            seen.add(path)
+            unique_paths.append(path)
+    paths_to_scan = unique_paths
     
     folders = []
     total_photos = 0
