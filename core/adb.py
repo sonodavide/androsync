@@ -252,3 +252,79 @@ def get_file_stat(path: str, device_serial: Optional[str] = None) -> Optional[di
     except (ADBError, ValueError):
         pass
     return None
+
+
+def find_media_files(
+    storage_root: str,
+    extensions: set[str],
+    device_serial: Optional[str] = None,
+    exclude_patterns: Optional[list[str]] = None
+) -> list[dict]:
+    """
+    Find all media files in a storage root using a single find command.
+    Much faster than recursive ls.
+    
+    Args:
+        storage_root: Root path to search (e.g., /storage/emulated/0)
+        extensions: Set of file extensions to find (e.g., {'.jpg', '.mp4'})
+        device_serial: Optional device serial
+        exclude_patterns: Optional list of path patterns to exclude
+    
+    Returns:
+        List of dicts with: path, name, size, mtime
+    """
+    # Build find command with all extensions
+    ext_conditions = []
+    for ext in extensions:
+        # Handle with and without dot
+        ext_clean = ext.lstrip('.')
+        ext_conditions.append(f'-iname "*.{ext_clean}"')
+    
+    ext_pattern = ' -o '.join(ext_conditions)
+    
+    # Build exclude patterns
+    exclude_cmd = ""
+    if exclude_patterns:
+        for pattern in exclude_patterns:
+            exclude_cmd += f' -path "*/{pattern}/*" -prune -o'
+    
+    # Use find with printf for structured output
+    # Format: size|mtime|path
+    find_cmd = (
+        f'find "{storage_root}" '
+        f'{exclude_cmd} '
+        f'-type f \\( {ext_pattern} \\) '
+        f'-printf "%s|%T@|%p\\n" 2>/dev/null'
+    )
+    
+    try:
+        output = shell_command(find_cmd, device_serial)
+    except ADBError:
+        return []
+    
+    files = []
+    for line in output.strip().split('\n'):
+        if not line or '|' not in line:
+            continue
+        
+        parts = line.split('|', 2)
+        if len(parts) != 3:
+            continue
+        
+        try:
+            size = int(parts[0])
+            mtime = parts[1].split('.')[0]  # Remove fractional seconds
+            path = parts[2]
+            name = path.rsplit('/', 1)[-1] if '/' in path else path
+            
+            files.append({
+                'path': path,
+                'name': name,
+                'size': size,
+                'mtime': mtime,
+                'is_dir': False
+            })
+        except (ValueError, IndexError):
+            continue
+    
+    return files
