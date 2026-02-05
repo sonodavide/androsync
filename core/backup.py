@@ -105,12 +105,21 @@ class BackupManager:
             remote_path = file_info['path']
             
             # Calculate local path maintaining folder structure
-            # Remove /sdcard/ prefix and join with destination
+            # Keep storage type distinction to avoid conflicts
             relative_path = remote_path
             if relative_path.startswith('/sdcard/'):
-                relative_path = relative_path[8:]
+                relative_path = 'internal/' + relative_path[8:]
             elif relative_path.startswith('/storage/emulated/0/'):
-                relative_path = relative_path[20:]
+                relative_path = 'internal/' + relative_path[20:]
+            elif relative_path.startswith('/storage/'):
+                # SD card or other storage: /storage/XXXX-XXXX/... -> sdcard_XXXX-XXXX/...
+                parts = relative_path[9:].split('/', 1)
+                if len(parts) == 2:
+                    storage_name = parts[0]
+                    rest = parts[1]
+                    relative_path = f'sdcard_{storage_name}/{rest}'
+                else:
+                    relative_path = relative_path[1:]  # Remove leading /
             
             local_path = os.path.join(self.destination, relative_path)
             
