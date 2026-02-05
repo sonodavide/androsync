@@ -11,13 +11,13 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QProgressBar,
     QTextEdit, QFileDialog, QMessageBox, QFrame, QSplitter, QHeaderView,
-    QCheckBox
+    QCheckBox, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 from core.adb import check_adb_available, get_connected_devices, get_single_device, ADBError
-from core.scanner import scan_media_folders, MediaFolder, ScanResult
+from core.scanner import scan_media_folders, MediaFolder, ScanResult, get_storage_roots
 from core.backup import BackupManager, BackupProgress, BackupStatus
 
 
@@ -38,10 +38,13 @@ class ScanWorker(QThread):
     progress = pyqtSignal(str)  # Current folder being scanned
     error = pyqtSignal(str)
     
-    def __init__(self, scan_internal: bool = True, scan_sdcard: bool = True):
+    def __init__(self, storage_paths: dict[str, str]):
+        """
+        Args:
+            storage_paths: Dict mapping path -> display name to scan
+        """
         super().__init__()
-        self.scan_internal = scan_internal
-        self.scan_sdcard = scan_sdcard
+        self.storage_paths = storage_paths
     
     def run(self):
         try:
@@ -49,8 +52,7 @@ class ScanWorker(QThread):
                 self.progress.emit(f"Scansione: {path}")
             
             result = scan_media_folders(
-                scan_internal=self.scan_internal,
-                scan_sdcard=self.scan_sdcard,
+                storage_paths=self.storage_paths,
                 progress_callback=on_progress
             )
             self.finished.emit(result)
@@ -105,6 +107,64 @@ class NumericTreeWidgetItem(QTreeWidgetItem):
         return self.text(column) < other.text(column)
 
 
+class StorageSelectionDialog(QDialog):
+    """Dialog for selecting which storage to scan."""
+    
+    def __init__(self, available_storage: dict[str, str], parent=None):
+        """
+        Args:
+            available_storage: Dict mapping path -> display name
+        """
+        super().__init__(parent)
+        self.available_storage = available_storage
+        self.selected_storage: dict[str, str] = {}
+        
+        self.setWindowTitle("Seleziona Storage")
+        self.setMinimumWidth(300)
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        label = QLabel("Seleziona gli storage da scansionare:")
+        layout.addWidget(label)
+        
+        # List with checkboxes
+        self.list_widget = QListWidget()
+        for path, name in self.available_storage.items():
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            # Default: select internal, not SD cards
+            if name == "Interno":
+                item.setCheckState(Qt.CheckState.Checked)
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.list_widget.addItem(item)
+        
+        layout.addWidget(self.list_widget)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def get_selected_storage(self) -> dict[str, str]:
+        """Return dict of selected storage paths and names."""
+        selected = {}
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                path = item.data(Qt.ItemDataRole.UserRole)
+                name = item.text()
+                selected[path] = name
+        return selected
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
     
@@ -116,6 +176,8 @@ class MainWindow(QMainWindow):
         self.is_scanning = False
         self.scan_animation_timer: Optional[QTimer] = None
         self.scan_animation_dots = 0
+        self.available_storage: dict[str, str] = {}  # path -> name
+        self.selected_storage: dict[str, str] = {}   # path -> name
         
         self.init_ui()
         self.check_device()
@@ -194,36 +256,63 @@ class MainWindow(QMainWindow):
         return frame
     
     def create_storage_panel(self) -> QWidget:
-        """Create storage selection panel."""
+        """Create storage selection panel with button and selected list."""
         frame = QFrame()
         frame.setObjectName("storage_panel")
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 8, 10, 8)
         
-        # Label
-        label = QLabel("Storage da scansionare:")
-        label.setFont(QFont("", 11))
-        layout.addWidget(label)
+        # Storage selection button
+        self.storage_btn = QPushButton("Seleziona Storage")
+        self.storage_btn.clicked.connect(self.open_storage_dialog)
+        self.storage_btn.setEnabled(False)  # Enabled after device check
+        layout.addWidget(self.storage_btn)
         
-        # Internal storage checkbox
-        self.internal_checkbox = QCheckBox("Interno")
-        self.internal_checkbox.setChecked(True)
-        layout.addWidget(self.internal_checkbox)
-        
-        # SD Card checkbox
-        self.sdcard_checkbox = QCheckBox("SD Card")
-        self.sdcard_checkbox.setChecked(False)
-        layout.addWidget(self.sdcard_checkbox)
+        # Selected storage label
+        self.storage_label = QLabel("Nessuno storage selezionato")
+        self.storage_label.setFont(QFont("", 11))
+        layout.addWidget(self.storage_label)
         
         layout.addStretch()
         
         # Scan button
         self.scan_btn = QPushButton("Avvia Scansione")
         self.scan_btn.clicked.connect(self.scan_device)
-        self.scan_btn.setEnabled(False)  # Enabled after device check
+        self.scan_btn.setEnabled(False)  # Enabled after storage selection
         layout.addWidget(self.scan_btn)
         
         return frame
+    
+    def open_storage_dialog(self):
+        """Open dialog to select storage."""
+        if not self.available_storage:
+            QMessageBox.warning(self, "Errore", "Nessuno storage disponibile")
+            return
+        
+        dialog = StorageSelectionDialog(self.available_storage, self)
+        
+        # Pre-select previously selected items
+        if self.selected_storage:
+            for i in range(dialog.list_widget.count()):
+                item = dialog.list_widget.item(i)
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if path in self.selected_storage:
+                    item.setCheckState(Qt.CheckState.Checked)
+                else:
+                    item.setCheckState(Qt.CheckState.Unchecked)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.selected_storage = dialog.get_selected_storage()
+            self.update_storage_label()
+            self.scan_btn.setEnabled(len(self.selected_storage) > 0)
+    
+    def update_storage_label(self):
+        """Update the storage label with selected storage names."""
+        if self.selected_storage:
+            names = list(self.selected_storage.values())
+            self.storage_label.setText(", ".join(names))
+        else:
+            self.storage_label.setText("Nessuno storage selezionato")
     
     def create_folder_tree(self) -> QWidget:
         """Create folder selection tree."""
@@ -406,12 +495,16 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
     
     def check_device(self):
-        """Check for connected Android device."""
+        """Check for connected Android device and detect available storage."""
         self.device_label.setText("Ricerca dispositivo...")
         self.folder_tree.clear()
         self.summary_label.setText("")
         self.select_all_checkbox.setEnabled(False)
         self.scan_btn.setEnabled(False)
+        self.storage_btn.setEnabled(False)
+        self.available_storage = {}
+        self.selected_storage = {}
+        self.storage_label.setText("Nessuno storage selezionato")
         
         # Check ADB
         if not check_adb_available():
@@ -441,9 +534,17 @@ class MainWindow(QMainWindow):
             self.device_label.setText(f"[OK] {device.model}")
             self.log(f"[OK] Dispositivo connesso: {device.model} ({device.serial})")
             
-            # Enable scan button - user can choose storage and start scan
-            self.scan_btn.setEnabled(True)
-            self.log("Seleziona lo storage da scansionare e premi 'Avvia Scansione'")
+            # Detect available storage
+            self.log("Rilevamento storage disponibili...")
+            self.available_storage = get_storage_roots()
+            
+            if self.available_storage:
+                storage_list = ", ".join(self.available_storage.values())
+                self.log(f"[OK] Storage trovati: {storage_list}")
+                self.storage_btn.setEnabled(True)
+                self.log("Clicca 'Seleziona Storage' per scegliere cosa scansionare")
+            else:
+                self.log("ERRORE: Nessuno storage rilevato sul dispositivo")
             
         except ADBError as e:
             self.device_label.setText("[ERRORE] ADB")
@@ -482,31 +583,23 @@ class MainWindow(QMainWindow):
     
     def scan_device(self):
         """Start device scan in background."""
-        scan_internal = self.internal_checkbox.isChecked()
-        scan_sdcard = self.sdcard_checkbox.isChecked()
-        
-        if not scan_internal and not scan_sdcard:
+        if not self.selected_storage:
             self.log("ERRORE: Seleziona almeno uno storage da scansionare")
             return
         
-        storage_msg = []
-        if scan_internal:
-            storage_msg.append("Interno")
-        if scan_sdcard:
-            storage_msg.append("SD Card")
+        storage_names = ", ".join(self.selected_storage.values())
+        self.log(f"Scansione {storage_names} in corso...")
         
-        self.log(f"Scansione {' + '.join(storage_msg)} in corso...")
         self.folder_tree.clear()
         self.backup_btn.setEnabled(False)
         self.select_all_checkbox.setEnabled(False)
         self.scan_btn.setEnabled(False)
-        self.internal_checkbox.setEnabled(False)
-        self.sdcard_checkbox.setEnabled(False)
+        self.storage_btn.setEnabled(False)
         
         # Show scanning animation
         self.start_scan_animation()
         
-        self.scan_worker = ScanWorker(scan_internal, scan_sdcard)
+        self.scan_worker = ScanWorker(self.selected_storage)
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
@@ -557,8 +650,7 @@ class MainWindow(QMainWindow):
         self.select_all_checkbox.setEnabled(True)
         self.select_all_checkbox.setChecked(True)
         self.scan_btn.setEnabled(True)
-        self.internal_checkbox.setEnabled(True)
-        self.sdcard_checkbox.setEnabled(True)
+        self.storage_btn.setEnabled(True)
         self.update_backup_button()
     
     def on_select_all_changed(self, state: int):
