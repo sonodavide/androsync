@@ -10,7 +10,7 @@
 - 🎯 **Smart Category Selection**: Choose exactly what to backup with an intuitive category picker
 - 💾 **Multi-Storage Detection**: Automatically detects internal storage, SD cards, and other mounted volumes
 - ⚡ **Incremental Sync**: Only transfers new or modified files (rsync-style)
-- 🖥️ **Dual Interface**: Modern PyQt6 GUI or powerful CLI for automation
+- 🖥️ **Triple Interface**: Modern PyQt6 GUI, rich TUI (terminal UI), or CLI for automation
 - 📊 **Detailed Statistics**: Real-time breakdown by file type (photos, videos, PDFs, etc.)
 - 📝 **Progress Tracking**: Visual progress bars and detailed logging
 
@@ -73,6 +73,26 @@ Follow the interactive prompts to:
 - Choose destination path
 - Monitor backup progress
 
+### TUI Mode (Terminal UI)
+
+```bash
+python main_tui.py
+```
+
+A modern terminal interface with keyboard shortcuts:
+
+| Key | Action |
+|-----|--------|
+| `s` | Select storage |
+| `c` | Select categories |
+| `a` | Scan device |
+| `d` | Set destination |
+| `b` | Start backup |
+| `t` | Toggle select all |
+| `Space` | Toggle folder selection |
+| `r` | Refresh device |
+| `q` | Quit |
+
 ## 📂 File Categories
 
 | Category | File Types |
@@ -81,8 +101,4 @@ Follow the interactive prompts to:
 | **Documents** | PDF, Office files (Word, Excel, PowerPoint), Text files, Data files (JSON, XML, CSV) |
 | **APK** | Android application packages (.apk, .xapk, .apkm) |
 | **Other** | Everything else not in the above categories |
-
-
-
-
 
