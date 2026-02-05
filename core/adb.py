@@ -170,6 +170,113 @@ def pull_file(remote_path: str, local_path: str, device_serial: Optional[str] = 
         raise ADBError(f"Pull timed out for: {remote_path}")
 
 
+def pull_files_tar(
+    remote_paths: list[str],
+    local_base_dir: str,
+    path_mapping: dict[str, str],
+    device_serial: Optional[str] = None,
+    progress_callback: Optional[callable] = None
+) -> tuple[int, int]:
+    """
+    Pull multiple files using tar streaming - much faster for many small files.
+    
+    Args:
+        remote_paths: List of remote file paths to pull
+        local_base_dir: Base directory for local files
+        path_mapping: Dict mapping remote_path -> relative local path
+        device_serial: Optional device serial
+        progress_callback: Optional callback(files_done, total_files)
+    
+    Returns:
+        Tuple of (success_count, fail_count)
+    """
+    import tarfile
+    import io
+    
+    if not remote_paths:
+        return 0, 0
+    
+    success = 0
+    failed = 0
+    
+    # Process in batches to avoid command line limits
+    batch_size = 100
+    total = len(remote_paths)
+    
+    for batch_start in range(0, total, batch_size):
+        batch = remote_paths[batch_start:batch_start + batch_size]
+        
+        # Create tar command with file list
+        # Use printf to handle special characters in filenames
+        files_arg = ' '.join(f'"{p}"' for p in batch)
+        tar_cmd = f'tar -cf - {files_arg} 2>/dev/null'
+        
+        cmd = ["adb"]
+        if device_serial:
+            cmd.extend(["-s", device_serial])
+        cmd.extend(["shell", tar_cmd])
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=1800  # 30 minutes for batch
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                # Extract from tar
+                try:
+                    tar_data = io.BytesIO(result.stdout)
+                    with tarfile.open(fileobj=tar_data, mode='r:') as tar:
+                        for member in tar.getmembers():
+                            if member.isfile():
+                                # Find matching remote path
+                                remote_path = '/' + member.name
+                                if remote_path in path_mapping:
+                                    local_rel = path_mapping[remote_path]
+                                    local_path = os.path.join(local_base_dir, local_rel)
+                                    
+                                    # Create directory
+                                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                                    
+                                    # Extract file
+                                    with tar.extractfile(member) as src:
+                                        if src:
+                                            with open(local_path, 'wb') as dst:
+                                                dst.write(src.read())
+                                            success += 1
+                except tarfile.TarError:
+                    # Tar extraction failed, fall back to individual pulls
+                    for remote_path in batch:
+                        if remote_path in path_mapping:
+                            local_rel = path_mapping[remote_path]
+                            local_path = os.path.join(local_base_dir, local_rel)
+                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                            if pull_file(remote_path, local_path, device_serial):
+                                success += 1
+                            else:
+                                failed += 1
+            else:
+                # Tar failed, fall back to individual pulls
+                for remote_path in batch:
+                    if remote_path in path_mapping:
+                        local_rel = path_mapping[remote_path]
+                        local_path = os.path.join(local_base_dir, local_rel)
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        if pull_file(remote_path, local_path, device_serial):
+                            success += 1
+                        else:
+                            failed += 1
+                            
+        except subprocess.TimeoutExpired:
+            failed += len(batch)
+        
+        if progress_callback:
+            progress_callback(batch_start + len(batch), total)
+    
+    return success, failed
+
+
 def list_files(path: str, device_serial: Optional[str] = None) -> list[dict]:
     """
     List files in a directory on the Android device with details.

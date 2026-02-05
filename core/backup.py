@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from typing import Optional, Callable
 from enum import Enum
 
-from .adb import pull_file, ADBError, get_single_device
+from .adb import pull_file, pull_files_tar, ADBError, get_single_device
 from .scanner import MediaFolder, get_all_media_files, is_media_file
 from .manifest import Manifest
+
+# Threshold for using batch mode (number of files)
+BATCH_MODE_THRESHOLD = 50
 
 
 class BackupStatus(Enum):
