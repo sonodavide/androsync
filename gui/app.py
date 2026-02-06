@@ -67,7 +67,7 @@ class ScanWorker(QThread):
 class BackupWorker(QThread):
     """Worker thread for backup operation."""
     progress = Signal(object)  # BackupProgress
-    finished = Signal(object)  # Final BackupProgress
+    finished = Signal(object, float)  # Final BackupProgress, elapsed_time
     
     def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
         super().__init__()
@@ -75,8 +75,11 @@ class BackupWorker(QThread):
         self.categories = categories
         self.destination = destination
         self.manager: Optional[BackupManager] = None
+        self.start_time: float = 0
     
     def run(self):
+        import time
+        self.start_time = time.time()
         self.manager = BackupManager(self.destination)
         
         def on_progress(bp: BackupProgress):
@@ -87,11 +90,32 @@ class BackupWorker(QThread):
             categories=self.categories, 
             progress_callback=on_progress
         )
-        self.finished.emit(result)
+        elapsed = time.time() - self.start_time
+        self.finished.emit(result, elapsed)
     
     def cancel(self):
         if self.manager:
             self.manager.cancel()
+
+
+class AnalyzeWorker(QThread):
+    """Worker thread for analyzing files before backup."""
+    finished = Signal(list, list)  # to_sync, already_synced
+    error = Signal(str)
+    
+    def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
+        super().__init__()
+        self.folders = folders
+        self.categories = categories
+        self.destination = destination
+    
+    def run(self):
+        try:
+            manager = BackupManager(self.destination)
+            to_sync, already_synced = manager.analyze_folders(self.folders, self.categories)
+            self.finished.emit(to_sync, already_synced)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class NumericTreeWidgetItem(QTreeWidgetItem):
@@ -907,10 +931,22 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Attenzione", "Seleziona una destinazione per il backup.")
             return
         
-        # Analyze first
+        # Disable backup button during analysis
+        self.backup_btn.setEnabled(False)
+        self.backup_btn.setText("Analisi...")
+        
+        # Analyze in background
         self.log("\nAnalisi file in corso...")
-        manager = BackupManager(self.destination)
-        to_sync, already_synced = manager.analyze_folders(folders, self.selected_categories)
+        self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination)
+        self.analyze_worker.finished.connect(self.on_analyze_finished)
+        self.analyze_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
+        self.analyze_worker.start()
+    
+    def on_analyze_finished(self, to_sync: list, already_synced: list):
+        """Handle analyze completion and show confirmation dialog."""
+        # Re-enable backup button
+        self.backup_btn.setEnabled(True)
+        self.backup_btn.setText("Avvia Backup")
         
         sync_size = sum(f.size for f in already_synced)
         new_size = sum(f.size for f in to_sync)
@@ -948,6 +984,7 @@ class MainWindow(QMainWindow):
         self.select_all_checkbox.setEnabled(False)
         
         # Start worker
+        folders = self.get_selected_folders()
         self.backup_worker = BackupWorker(folders, self.selected_categories, self.destination)
         self.backup_worker.progress.connect(self.on_backup_progress)
         self.backup_worker.finished.connect(self.on_backup_finished)
@@ -961,7 +998,7 @@ class MainWindow(QMainWindow):
         if progress.current_file:
             self.progress_bar.setFormat(f"%p% - {progress.current_file}")
     
-    def on_backup_finished(self, progress: BackupProgress):
+    def on_backup_finished(self, progress: BackupProgress, elapsed_time: float):
         """Handle backup completion."""
         self.backup_worker = None
         
@@ -972,8 +1009,18 @@ class MainWindow(QMainWindow):
         self.dest_btn.setEnabled(True)
         self.select_all_checkbox.setEnabled(True)
         
+        # Format elapsed time
+        minutes, seconds = divmod(int(elapsed_time), 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            time_str = f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            time_str = f"{minutes}m {seconds}s"
+        else:
+            time_str = f"{seconds}s"
+        
         if progress.status == BackupStatus.COMPLETED:
-            self.log(f"\n[OK] Backup completato!")
+            self.log(f"\n[OK] Backup completato in {time_str}!")
             self.log(f"   Scaricati: {progress.completed_files:,} file")
             self.log(f"   Gia presenti: {progress.skipped_files:,} file")
             if progress.failed_files > 0:
@@ -982,13 +1029,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Backup Completato",
-                f"Backup completato con successo!\n\n"
+                f"Backup completato con successo in {time_str}!\n\n"
                 f"- Scaricati: {progress.completed_files:,} file\n"
                 f"- Gia presenti: {progress.skipped_files:,} file\n"
                 f"- Falliti: {progress.failed_files:,} file"
             )
         elif progress.status == BackupStatus.CANCELLED:
-            self.log("\n[!] Backup interrotto dall'utente.")
+            self.log(f"\n[!] Backup interrotto dall'utente dopo {time_str}.")
             self.log("   I progressi sono stati salvati. Riavvia per riprendere.")
     
     def cancel_backup(self):

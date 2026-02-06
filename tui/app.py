@@ -923,6 +923,9 @@ class AndroSyncTUI(App):
     @work(exclusive=True, thread=True)
     def run_backup(self, folders: list[MediaFolder]) -> None:
         """Run backup in background thread."""
+        import time
+        start_time = time.time()
+        
         self.call_from_thread(self._show_progress, "󰋊  Analyzing files...")
         
         try:
@@ -968,7 +971,8 @@ class AndroSyncTUI(App):
                 progress_callback=on_progress
             )
             
-            self.call_from_thread(self._on_backup_complete, result)
+            elapsed_time = time.time() - start_time
+            self.call_from_thread(self._on_backup_complete, result, elapsed_time)
             
         except Exception as e:
             self.call_from_thread(self.notify, f"Backup error: {e}", severity="error")
@@ -987,22 +991,32 @@ class AndroSyncTUI(App):
             filename = bp.current_file.split('/')[-1] if '/' in bp.current_file else bp.current_file
             self._log_message(f"[green]󰄬[/green] {filename}")
     
-    def _on_backup_complete(self, result: BackupProgress) -> None:
+    def _on_backup_complete(self, result: BackupProgress, elapsed_time: float) -> None:
         """Handle backup completion."""
+        # Format elapsed time
+        minutes, seconds = divmod(int(elapsed_time), 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            time_str = f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            time_str = f"{minutes}m {seconds}s"
+        else:
+            time_str = f"{seconds}s"
+        
         if result.status == BackupStatus.COMPLETED:
             self.notify(
-                f"Backup complete: {result.completed_files:,} files",
+                f"Backup complete in {time_str}: {result.completed_files:,} files",
                 severity="information",
                 timeout=5
             )
             self._log_message("")
-            self._log_message(f"[bold green]╔═══ Backup Complete ═══╗[/bold green]")
+            self._log_message(f"[bold green]╔═══ Backup Complete ({time_str}) ═══╗[/bold green]")
             self._log_message(f"[green]󰄬 Completed:[/green] {result.completed_files:,}")
             self._log_message(f"[blue]󰒭 Skipped:[/blue] {result.skipped_files:,}")
             if result.failed_files > 0:
                 self._log_message(f"[red]󰜺 Failed:[/red] {result.failed_files:,}")
         elif result.status == BackupStatus.CANCELLED:
-            self.notify("Backup cancelled", severity="warning")
+            self.notify(f"Backup cancelled after {time_str}", severity="warning")
     
     @on(Button.Pressed, "#btn-scan")
     def on_scan_button(self) -> None:
