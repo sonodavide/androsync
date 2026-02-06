@@ -264,7 +264,7 @@ class BackupManager:
                 # Create directory structure
                 os.makedirs(os.path.dirname(file_to_sync.local_path), exist_ok=True)
                 
-                # Pull file from device
+                # Pull file from device (using -a flag to preserve timestamps)
                 success = pull_file(
                     file_to_sync.remote_path,
                     file_to_sync.local_path,

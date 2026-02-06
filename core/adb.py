@@ -154,7 +154,7 @@ def pull_file(remote_path: str, local_path: str, device_serial: Optional[str] = 
     cmd = ["adb"]
     if device_serial:
         cmd.extend(["-s", device_serial])
-    cmd.extend(["pull", remote_path, local_path])
+    cmd.extend(["pull", "-a", remote_path, local_path])
     
     try:
         result = subprocess.run(
@@ -244,6 +244,8 @@ def pull_files_tar(
                                         if src:
                                             with open(local_path, 'wb') as dst:
                                                 dst.write(src.read())
+                                            # Preserve original timestamp
+                                            os.utime(local_path, (member.mtime, member.mtime))
                                             success += 1
                 except tarfile.TarError:
                     # Tar extraction failed, fall back to individual pulls
