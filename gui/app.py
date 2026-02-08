@@ -263,9 +263,45 @@ class MainWindow(QMainWindow):
         self.selected_storage: dict[str, str] = {}   # path -> name
         self.selected_categories: list[str] = ['media']
         
+        self.log_file = None # Initialize log file handle
+        self.setup_logging() # Call setup_logging
+        
         self.init_ui()
         self.check_device()
     
+    def setup_logging(self):
+        """Setup logging to file."""
+        import datetime
+        import os
+        
+        # Create logs directory
+        log_dir = os.path.join(os.getcwd(), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create log file with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"gui_{timestamp}.log"
+        log_path = os.path.join(log_dir, filename)
+        
+        try:
+            self.log_file = open(log_path, 'a', encoding='utf-8')
+            # Write header
+            self.log_file.write(f"=== Android Media Backup GUI Log Started: {timestamp} ===\n")
+            self.log_file.flush()
+        except OSError as e:
+            print(f"Failed to create log file: {e}")
+            self.log_file = None # Ensure it's None if creation failed
+    
+    def closeEvent(self, event):
+        """Ensure log file is closed on application exit."""
+        if self.log_file:
+            try:
+                self.log_file.write(f"=== Android Media Backup GUI Log Ended: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} ===\n")
+                self.log_file.close()
+            except OSError:
+                pass # Ignore errors during close
+        super().closeEvent(event)
+
     def init_ui(self):
         """Initialize the user interface."""
         self.setWindowTitle("Android Media Backup")
@@ -1068,6 +1104,13 @@ class MainWindow(QMainWindow):
             
             self.backup_worker.cancel()
             self.backup_worker.wait(3000)  # Wait max 3 seconds
+        
+        if self.log_file:
+            try:
+                self.log_file.write("=== Application Closed ===\n")
+                self.log_file.close()
+            except OSError:
+                pass
         
         event.accept()
 

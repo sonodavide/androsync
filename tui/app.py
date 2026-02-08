@@ -474,6 +474,10 @@ class LogPanel(ScrollableContainer):
             self.messages = self.messages[-100:]
         self._update_content()
         self.scroll_end(animate=False)
+        
+        # Write to app log file if available
+        if hasattr(self.app, '_log_message'):
+            self.app._log_message(message)
     
     def clear(self) -> None:
         """Clear all messages."""
@@ -667,6 +671,44 @@ class AndroSyncTUI(App):
         self.destination: str = "./backup"
         self.backup_manager: Optional[BackupManager] = None
         self._backup_cancelled = False
+        
+        # Setup logging
+        self.log_file = None
+        self.setup_logging()
+    
+    def setup_logging(self):
+        """Setup logging to file."""
+        import datetime
+        import os
+        
+        # Create logs directory
+        log_dir = os.path.join(os.getcwd(), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create log file with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"tui_{timestamp}.log"
+        log_path = os.path.join(log_dir, filename)
+        
+        try:
+            self.log_file = open(log_path, 'a', encoding='utf-8')
+            # Write header
+            self.log_file.write(f"=== Android Media Backup TUI Log Started: {timestamp} ===\n")
+            self.log_file.flush()
+        except OSError as e:
+            # Fallback to console if file logging fails, though TUI consumes console
+            pass
+            
+    def _log_message(self, message: str) -> None:
+        """Internal helper to log to file."""
+        if self.log_file:
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                self.log_file.write(f"[{timestamp}] {message}\n")
+                self.log_file.flush()
+            except OSError:
+                pass
     
     def compose(self) -> ComposeResult:
         with Container(id="app-header"):
@@ -987,6 +1029,9 @@ class AndroSyncTUI(App):
         progress_bar = self.query_one("#progress-bar", ProgressBar)
         progress_bar.update(progress=bp.completed_files)
         
+        if bp.error_message:
+            self._log_message(f"[red]ERROR:[/red] {bp.current_file} -> {bp.error_message}")
+
         if bp.current_file:
             filename = bp.current_file.split('/')[-1] if '/' in bp.current_file else bp.current_file
             self._log_message(f"[green]󰄬[/green] {filename}")
@@ -1032,3 +1077,13 @@ class AndroSyncTUI(App):
         tree = self.query_one("#folder-tree", FolderTree)
         if event.node.data:
             tree.toggle_selection(event.node)
+
+    def on_unmount(self) -> None:
+        """Handle unmount."""
+        if self.log_file:
+            try:
+                import datetime
+                self.log_file.write(f"=== Android Media Backup TUI Log Ended: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} ===\n")
+                self.log_file.close()
+            except OSError:
+                pass
