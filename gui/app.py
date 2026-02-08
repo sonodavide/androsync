@@ -997,6 +997,14 @@ class MainWindow(QMainWindow):
         
         if progress.current_file:
             self.progress_bar.setFormat(f"%p% - {progress.current_file}")
+            
+        if progress.error_message:
+            # Log the specific error
+            self.log(f"[ERRORE] File: {progress.current_file}")
+            self.log(f"   -> {progress.error_message}")
+            # Clear error from progress object if needed, but here we just log it
+            # The backend keeps going, so we just notify
+            self.log("   Continuo con il prossimo file...")
     
     def on_backup_finished(self, progress: BackupProgress, elapsed_time: float):
         """Handle backup completion."""

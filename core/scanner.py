@@ -133,6 +133,7 @@ class MediaFolder:
     storage_type: str = ""
     storage_root: str = ""
     subfolders: list['MediaFolder'] = field(default_factory=list)
+    files: list[dict] = field(default_factory=list)
     
     @property
     def total_count(self) -> int:
@@ -317,12 +318,14 @@ def aggregate_files_to_folders(
                 'files': 0,
                 'photos': 0,
                 'videos': 0,
-                'size': 0
+                'size': 0,
+                'file_list': []
             }
         
         # Track total files
         folder_stats[top_level_path]['files'] += 1
         folder_stats[top_level_path]['size'] += file_info['size']
+        folder_stats[top_level_path]['file_list'].append(file_info)
         
         # Categorize file for stats
         is_media, media_type = is_media_file(file_info['name'])
@@ -343,7 +346,8 @@ def aggregate_files_to_folders(
             video_count=stats['videos'],
             total_size=stats['size'],
             storage_type=storage_type,
-            storage_root=storage_root
+            storage_root=storage_root,
+            files=stats['file_list']
         )
         folders.append(folder)
     

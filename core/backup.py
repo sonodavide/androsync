@@ -155,7 +155,20 @@ class BackupManager:
         Returns:
             Tuple of (files_to_sync, already_exist)
         """
-        all_files = get_all_media_files(folder, categories, self.device_serial)
+        if folder.files:
+            # Use cached files from scan if available (avoid re-scanning)
+            # Filter by category if needed
+            from .scanner import is_file_in_categories
+            if categories:
+                all_files = [
+                    f for f in folder.files
+                    if is_file_in_categories(f['name'], categories)
+                ]
+            else:
+                all_files = folder.files
+        else:
+            # Fallback to scanning if no cached files
+            all_files = get_all_media_files(folder, categories, self.device_serial)
         
         # Build list of files with their local paths
         files_with_paths = []
