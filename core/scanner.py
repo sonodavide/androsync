@@ -202,7 +202,6 @@ def scan_media_folders(
     categories: list[str] = None,
     additional_paths: Optional[list[str]] = None,
     include_hidden: bool = False,
-    include_system: bool = False,
     progress_callback: Optional[callable] = None
 ) -> ScanResult:
     """
@@ -217,7 +216,6 @@ def scan_media_folders(
         categories: List of categories to scan (default: ['media']).
         additional_paths: Additional paths to scan beyond auto-discovered storage.
         include_hidden: Whether to include hidden files/directories (starting with '.').
-        include_system: Whether to include system directories (Android/data, cache, etc.).
         progress_callback: Optional callback(message, index, total) for progress.
     
     Returns:
@@ -258,10 +256,8 @@ def scan_media_folders(
         if progress_callback:
             progress_callback(f"Scansione {storage_type}...", idx, total_roots)
         
-        # Build exclude list: conditionally add system dirs, conditionally add hidden dirs
-        exclude = []
-        if not include_system:
-            exclude.extend(SKIP_DIRECTORIES)
+        # Build exclude list: always skip system dirs, conditionally skip hidden dirs
+        exclude = list(SKIP_DIRECTORIES)
         if not include_hidden:
             exclude.extend(SKIP_HIDDEN_DIRECTORIES)
         
@@ -318,8 +314,7 @@ def get_all_media_files(
     folder: MediaFolder, 
     categories: list[str] = None,
     device_serial: Optional[str] = None,
-    include_hidden: bool = False,
-    include_system: bool = False
+    include_hidden: bool = False
 ) -> list[dict]:
     """
     Get all media files from a folder using fast find command.
@@ -329,7 +324,6 @@ def get_all_media_files(
         categories: List of categories to find.
         device_serial: Optional device serial.
         include_hidden: Whether to include hidden files/directories.
-        include_system: Whether to include system directories.
     
     Returns:
         List of file info dicts with path, size, mtime.
@@ -338,10 +332,8 @@ def get_all_media_files(
     extensions, include_other = get_extensions_for_categories(categories)
     scan_extensions = {'*'} if include_other else extensions
     
-    # Build exclude list based on include_hidden and include_system
-    exclude = []
-    if not include_system:
-        exclude.extend(SKIP_DIRECTORIES)
+    # Build exclude list based on include_hidden
+    exclude = list(SKIP_DIRECTORIES)
     if not include_hidden:
         exclude.extend(SKIP_HIDDEN_DIRECTORIES)
     

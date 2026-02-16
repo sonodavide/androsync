@@ -52,7 +52,6 @@ class MainWindow(QMainWindow):
         self.device_serial: Optional[str] = None  # Selected device serial
         self.connected_devices: list = []  # List of connected devices
         self.include_hidden: bool = False  # Include hidden files flag
-        self.include_system: bool = False  # Include system directories flag
         
         self.log_file = None # Initialize log file handle
         self.setup_logging() # Call setup_logging
@@ -214,13 +213,12 @@ class MainWindow(QMainWindow):
     
     def open_category_dialog(self):
         """Open dialog to select categories."""
-        dialog = CategorySelectionDialog(self, self.selected_categories, self.include_hidden, self.include_system)
+        dialog = CategorySelectionDialog(self, self.selected_categories, self.include_hidden)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.selected_categories = dialog.get_selected_categories()
             self.include_hidden = dialog.get_include_hidden()
-            self.include_system = dialog.get_include_system()
             self.update_category_label()
-            # Invalidate scan if categories or hidden/system setting changed
+            # Invalidate scan if categories or hidden setting changed
             if self.scan_result:
                 self._scan_is_stale = True
                 self.update_scan_button_state()
@@ -621,7 +619,6 @@ class MainWindow(QMainWindow):
             self.selected_storage, 
             self.selected_categories,
             self.include_hidden,
-            self.include_system,
             self.device_serial
         )
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
@@ -634,9 +631,14 @@ class MainWindow(QMainWindow):
         self.stop_scan_animation()
         self.folder_tree.clear()
         self.scan_result = result
+        self._scan_is_stale = False  # Reset stale flag after scan completes
         
         if not result or not result.folders:
             self.log("Nessun media trovato sul dispositivo.")
+            # Re-enable controls even on empty result
+            self.scan_btn.setEnabled(True)
+            self.storage_btn.setEnabled(True)
+            self.update_scan_button_state()
             return
         
         self.log(f"[OK] Scansione completata: {result.total_media:,} file trovati")
@@ -772,7 +774,7 @@ class MainWindow(QMainWindow):
         
         # Analyze in background
         self.log("\nAnalisi file in corso...")
-        self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination, self.include_hidden, self.include_system, self.device_serial)
+        self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination, self.include_hidden, self.device_serial)
         self.analyze_worker.finished.connect(self.on_analyze_finished)
         self.analyze_worker.error.connect(self.on_analyze_error)
         self.analyze_worker.start()
@@ -834,7 +836,6 @@ class MainWindow(QMainWindow):
             self.selected_categories, 
             self.destination,
             self.include_hidden,
-            self.include_system,
             self.device_serial
         )
         self.backup_worker.progress.connect(self.on_backup_progress)
