@@ -10,7 +10,7 @@ from .adb import shell_command, find_media_files, ADBError
 from .models import MediaFolder, ScanResult
 from .categories import (
     FILE_CATEGORIES, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MEDIA_EXTENSIONS,
-    ALL_KNOWN_EXTENSIONS, SKIP_DIRECTORIES, EXPAND_DIRECTORIES,
+    ALL_KNOWN_EXTENSIONS, SKIP_DIRECTORIES, SKIP_HIDDEN_DIRECTORIES, EXPAND_DIRECTORIES,
     get_extensions_for_categories, get_file_subcategory, is_file_in_categories, is_media_file
 )
 
@@ -77,6 +77,23 @@ def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     return roots
 
 
+def is_hidden_path(path: str) -> bool:
+    """
+    Check if path is hidden (file or any parent directory starts with '.').
+    
+    Args:
+        path: File or directory path to check.
+    
+    Returns:
+        True if the path or any component starts with '.' (excluding '.' and '..').
+    """
+    parts = path.split('/')
+    for part in parts:
+        if part.startswith('.') and part not in ('.', '..'):
+            return True
+    return False
+
+
 def should_expand_directory(relative_path: str) -> bool:
     """Check if a directory should be expanded to show subfolders."""
     for expand in EXPAND_DIRECTORIES:
@@ -88,7 +105,8 @@ def should_expand_directory(relative_path: str) -> bool:
 def aggregate_files_to_folders(
     files: list[dict],
     storage_root: str,
-    storage_type: str
+    storage_type: str,
+    include_hidden: bool = False
 ) -> list[MediaFolder]:
     """
     Aggregate a flat list of files into folder statistics.
@@ -101,6 +119,10 @@ def aggregate_files_to_folders(
     Returns:
         List of MediaFolder objects
     """
+    # Filter hidden files if needed
+    if not include_hidden:
+        files = [f for f in files if not is_hidden_path(f['path'])]
+    
     # Group files by top-level folder
     folder_stats: dict[str, dict] = {}
     
@@ -179,6 +201,8 @@ def scan_media_folders(
     storage_paths: Optional[dict[str, str]] = None,
     categories: list[str] = None,
     additional_paths: Optional[list[str]] = None,
+    include_hidden: bool = False,
+    include_system: bool = False,
     progress_callback: Optional[callable] = None
 ) -> ScanResult:
     """
@@ -192,6 +216,8 @@ def scan_media_folders(
         storage_paths: Dict mapping path -> name for specific paths to scan.
         categories: List of categories to scan (default: ['media']).
         additional_paths: Additional paths to scan beyond auto-discovered storage.
+        include_hidden: Whether to include hidden files/directories (starting with '.').
+        include_system: Whether to include system directories (Android/data, cache, etc.).
         progress_callback: Optional callback(message, index, total) for progress.
     
     Returns:
@@ -232,12 +258,19 @@ def scan_media_folders(
         if progress_callback:
             progress_callback(f"Scansione {storage_type}...", idx, total_roots)
         
+        # Build exclude list: conditionally add system dirs, conditionally add hidden dirs
+        exclude = []
+        if not include_system:
+            exclude.extend(SKIP_DIRECTORIES)
+        if not include_hidden:
+            exclude.extend(SKIP_HIDDEN_DIRECTORIES)
+        
         # Use fast find command
         files = find_media_files(
             storage_root=root,
             extensions=scan_extensions,
             device_serial=device_serial,
-            exclude_patterns=SKIP_DIRECTORIES
+            exclude_patterns=exclude
         )
         
         # Filter files if needed (especially for "Other" category logic)
@@ -253,7 +286,7 @@ def scan_media_folders(
             progress_callback(f"Analisi {len(files)} file da {storage_type}...", idx, total_roots)
         
         if files:
-            folders = aggregate_files_to_folders(files, root, storage_type)
+            folders = aggregate_files_to_folders(files, root, storage_type, include_hidden)
             all_folders.extend(folders)
     
     # Sort by total count descending
@@ -284,7 +317,9 @@ def scan_media_folders(
 def get_all_media_files(
     folder: MediaFolder, 
     categories: list[str] = None,
-    device_serial: Optional[str] = None
+    device_serial: Optional[str] = None,
+    include_hidden: bool = False,
+    include_system: bool = False
 ) -> list[dict]:
     """
     Get all media files from a folder using fast find command.
@@ -293,6 +328,8 @@ def get_all_media_files(
         folder: MediaFolder to get files from.
         categories: List of categories to find.
         device_serial: Optional device serial.
+        include_hidden: Whether to include hidden files/directories.
+        include_system: Whether to include system directories.
     
     Returns:
         List of file info dicts with path, size, mtime.
@@ -301,15 +338,28 @@ def get_all_media_files(
     extensions, include_other = get_extensions_for_categories(categories)
     scan_extensions = {'*'} if include_other else extensions
     
+    # Build exclude list based on include_hidden and include_system
+    exclude = []
+    if not include_system:
+        exclude.extend(SKIP_DIRECTORIES)
+    if not include_hidden:
+        exclude.extend(SKIP_HIDDEN_DIRECTORIES)
+    
     files = find_media_files(
         storage_root=folder.path,
         extensions=scan_extensions,
         device_serial=device_serial,
-        exclude_patterns=SKIP_DIRECTORIES
+        exclude_patterns=exclude
     )
     
     # Filter files strictly
-    return [
+    filtered = [
         f for f in files 
         if is_file_in_categories(f['name'], categories)
     ]
+    
+    # Filter hidden if needed
+    if not include_hidden:
+        filtered = [f for f in filtered if not is_hidden_path(f['path'])]
+    
+    return filtered

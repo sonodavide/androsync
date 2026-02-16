@@ -38,15 +38,19 @@ ALL_KNOWN_EXTENSIONS = set()
 for cat in FILE_CATEGORIES.values():
     ALL_KNOWN_EXTENSIONS |= cat['extensions']
 
-# Directories to skip during scan
+# Directories to always skip during scan (system/app data)
 SKIP_DIRECTORIES = [
     'Android/data',
     'Android/obb',
+    'cache',
+    'lost+found',
+]
+
+# Hidden directories to skip by default (included when include_hidden=True)
+SKIP_HIDDEN_DIRECTORIES = [
     '.thumbnails',
     '.cache',
-    'cache',
     '.trash',
-    'lost+found',
 ]
 
 # Directories to expand to show individual subfolders

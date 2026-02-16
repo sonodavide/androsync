@@ -72,15 +72,19 @@ class StorageSelectionDialog(QDialog):
 class CategorySelectionDialog(QDialog):
     """Dialog for selecting which file categories to scan."""
     
-    def __init__(self, parent=None, selected_categories: list[str] = None):
+    def __init__(self, parent=None, selected_categories: list[str] = None, include_hidden: bool = False, include_system: bool = False):
         super().__init__(parent)
         self.selected_categories = selected_categories or ['media']
+        self.include_hidden = include_hidden
+        self.include_system = include_system
         
         self.setWindowTitle("Seleziona Categorie")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(350)
         self.setup_ui()
     
     def setup_ui(self):
+        from PySide6.QtWidgets import QCheckBox
+        
         layout = QVBoxLayout(self)
         
         # Instructions
@@ -99,7 +103,30 @@ class CategorySelectionDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, cat_id)
             self.list_widget.addItem(item)
         
+        # Connect item changed to update hidden checkbox state
+        self.list_widget.itemChanged.connect(self._update_hidden_checkbox_state)
+        
         layout.addWidget(self.list_widget)
+        
+        # Hidden files checkbox
+        self.hidden_checkbox = QCheckBox("Includi file nascosti (file/cartelle che iniziano con '.')")
+        self.hidden_checkbox.setChecked(self.include_hidden)
+        self.hidden_checkbox.setEnabled(len(self.selected_categories) > 0)
+        layout.addWidget(self.hidden_checkbox)
+        
+        # System directories checkbox
+        self.system_checkbox = QCheckBox("Includi cache e dati app (Android/data, cache, ecc.)")
+        self.system_checkbox.setChecked(self.include_system)
+        self.system_checkbox.setEnabled(len(self.selected_categories) > 0)
+        layout.addWidget(self.system_checkbox)
+        
+        # Info label
+        info_label = QLabel(
+            "<i><small>Le opzioni sopra si applicano solo alle categorie selezionate.<br>"
+            "<b>Attenzione:</b> includere cache/dati app può aumentare notevolmente i file trovati.</small></i>"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
         
         # Buttons
         button_box = QDialogButtonBox(
@@ -108,6 +135,19 @@ class CategorySelectionDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
+    
+    def _update_hidden_checkbox_state(self):
+        """Update hidden and system checkbox enabled state based on category selection."""
+        selected = self.get_selected_categories()
+        has_selection = len(selected) > 0
+        
+        self.hidden_checkbox.setEnabled(has_selection)
+        self.system_checkbox.setEnabled(has_selection)
+        
+        # If no categories selected, uncheck both
+        if not has_selection:
+            self.hidden_checkbox.setChecked(False)
+            self.system_checkbox.setChecked(False)
     
     def get_selected_categories(self) -> list[str]:
         """Return list of selected category IDs."""
@@ -118,3 +158,12 @@ class CategorySelectionDialog(QDialog):
                 cat_id = item.data(Qt.ItemDataRole.UserRole)
                 selected.append(cat_id)
         return selected
+    
+    def get_include_hidden(self) -> bool:
+        """Return whether to include hidden files."""
+        return self.hidden_checkbox.isChecked()
+    
+    def get_include_system(self) -> bool:
+        """Return whether to include system directories."""
+        return self.system_checkbox.isChecked()
+

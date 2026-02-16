@@ -147,7 +147,7 @@ class BackupManager:
         
         return existing
     
-    def analyze_folder(self, folder: MediaFolder, categories: list[str] = None) -> tuple[list[FileToSync], list[FileToSync]]:
+    def analyze_folder(self, folder: MediaFolder, categories: list[str] = None, include_hidden: bool = False, include_system: bool = False) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze a folder to determine what needs to be synced.
         Rsync-like: compares directly with local files.
@@ -171,7 +171,7 @@ class BackupManager:
                 all_files = folder.files
         else:
             # Fallback to scanning if no cached files
-            all_files = get_all_media_files(folder, categories, self.device_serial)
+            all_files = get_all_media_files(folder, categories, self.device_serial, include_hidden, include_system)
         
         # Build list of files with their local paths
         files_with_paths = []
@@ -208,7 +208,7 @@ class BackupManager:
         
         return to_sync, already_exist
     
-    def analyze_folders(self, folders: list[MediaFolder], categories: list[str] = None) -> tuple[list[FileToSync], list[FileToSync]]:
+    def analyze_folders(self, folders: list[MediaFolder], categories: list[str] = None, include_hidden: bool = False, include_system: bool = False) -> tuple[list[FileToSync], list[FileToSync]]:
         """
         Analyze multiple folders.
         
@@ -219,7 +219,7 @@ class BackupManager:
         all_exist = []
         
         for folder in folders:
-            to_sync, exist = self.analyze_folder(folder, categories)
+            to_sync, exist = self.analyze_folder(folder, categories, include_hidden, include_system)
             all_to_sync.extend(to_sync)
             all_exist.extend(exist)
         
@@ -229,6 +229,8 @@ class BackupManager:
         self,
         folders: list[MediaFolder],
         categories: list[str] = None,
+        include_hidden: bool = False,
+        include_system: bool = False,
         progress_callback: Optional[Callable[[BackupProgress], None]] = None
     ) -> BackupProgress:
         """
@@ -244,7 +246,7 @@ class BackupManager:
         self._cancelled = False
         
         # Analyze what needs to be synced
-        to_sync, already_exist = self.analyze_folders(folders, categories)
+        to_sync, already_exist = self.analyze_folders(folders, categories, include_hidden, include_system)
         
         total_files = len(to_sync) + len(already_exist)
         total_bytes = sum(f.size for f in to_sync) + sum(f.size for f in already_exist)

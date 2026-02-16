@@ -48,6 +48,12 @@ class MainWindow(QMainWindow):
         self._last_logged_file: Optional[str] = None  # Track last logged file
         self._scan_is_stale = False  # Track if scan needs refresh
         
+        # Device and parameters
+        self.device_serial: Optional[str] = None  # Selected device serial
+        self.connected_devices: list = []  # List of connected devices
+        self.include_hidden: bool = False  # Include hidden files flag
+        self.include_system: bool = False  # Include system directories flag
+        
         self.log_file = None # Initialize log file handle
         self.setup_logging() # Call setup_logging
         
@@ -145,8 +151,17 @@ class MainWindow(QMainWindow):
         self.device_label.setFont(QFont("", 11))
         layout.addWidget(self.device_label)
         
+        # Device selector combobox (for multiple devices)
+        from PySide6.QtWidgets import QComboBox
+        self.device_combo = QComboBox()
+        self.device_combo.setMinimumWidth(200)
+        self.device_combo.currentIndexChanged.connect(self._on_device_selection_changed)
+        self.device_combo.hide()  # Initially hidden
+        layout.addWidget(self.device_combo)
+        
         # Refresh button
         refresh_btn = QPushButton("Aggiorna")
+        refresh_btn.setToolTip("Aggiorna lista dispositivi")
         refresh_btn.clicked.connect(self.check_device)
         layout.addWidget(refresh_btn)
         
@@ -199,11 +214,13 @@ class MainWindow(QMainWindow):
     
     def open_category_dialog(self):
         """Open dialog to select categories."""
-        dialog = CategorySelectionDialog(self, self.selected_categories)
+        dialog = CategorySelectionDialog(self, self.selected_categories, self.include_hidden, self.include_system)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.selected_categories = dialog.get_selected_categories()
+            self.include_hidden = dialog.get_include_hidden()
+            self.include_system = dialog.get_include_system()
             self.update_category_label()
-            # Invalidate scan if categories changed
+            # Invalidate scan if categories or hidden/system setting changed
             if self.scan_result:
                 self._scan_is_stale = True
                 self.update_scan_button_state()
@@ -468,24 +485,41 @@ class MainWindow(QMainWindow):
             
             if len(authorized) == 0:
                 self.device_label.setText("[ERRORE] Nessun dispositivo")
+                self.device_combo.hide()
+                self.connected_devices = []
+                self.device_serial = None
                 self.log("ERRORE: Nessun dispositivo Android connesso.")
                 self.log("   - Assicurati che il dispositivo sia collegato via USB")
                 self.log("   - Attiva il debug USB nelle impostazioni sviluppatore")
                 self.log("   - Autorizza il computer sul dispositivo")
                 return
             
-            if len(authorized) > 1:
-                self.device_label.setText("[ATTENZIONE] Piu dispositivi connessi")
-                self.log("ATTENZIONE: Collegare un solo dispositivo alla volta.")
-                return
+            # Store connected devices and populate combobox
+            self.connected_devices = authorized
             
-            device = authorized[0]
-            self.device_label.setText(f"[OK] {device.model}")
-            self.log(f"[OK] Dispositivo connesso: {device.model} ({device.serial})")
+            if len(authorized) > 1:
+                # Multiple devices: show combobox
+                self.device_label.setText("[OK] Seleziona dispositivo:")
+                self.device_combo.clear()
+                for dev in authorized:
+                    self.device_combo.addItem(f"{dev.model} ({dev.serial})", dev.serial)
+                self.device_combo.show()
+                
+                # Set current device_serial from combobox
+                self.device_serial = self.device_combo.currentData()
+                
+                self.log(f"[OK] {len(authorized)} dispositivi connessi. Seleziona uno dal menu.")
+            else:
+                # Single device: hide combobox, use directly
+                device = authorized[0]
+                self.device_serial = device.serial
+                self.device_combo.hide()
+                self.device_label.setText(f"[OK] {device.model}")
+                self.log(f"[OK] Dispositivo connesso: {device.model} ({device.serial})")
             
             # Detect available storage
             self.log("Rilevamento storage disponibili...")
-            self.available_storage = get_storage_roots()
+            self.available_storage = get_storage_roots(self.device_serial)
             
             if self.available_storage:
                 storage_list = ", ".join(self.available_storage.values())
@@ -497,7 +531,37 @@ class MainWindow(QMainWindow):
             
         except ADBError as e:
             self.device_label.setText("[ERRORE] ADB")
+            self.device_combo.hide()
+            self.connected_devices = []
+            self.device_serial = None
             self.log(f"ERRORE ADB: {e}")
+    
+    def _on_device_selection_changed(self, index: int):
+        """Handle device selection change from combobox."""
+        if index >= 0:
+            self.device_serial = self.device_combo.itemData(index)
+            device_model = self.device_combo.itemText(index)
+            self.log(f"Dispositivo selezionato: {device_model}")
+            
+            # Invalidate scan if device changed
+            if self.scan_result:
+                self._scan_is_stale = True
+                self.update_scan_button_state()
+            
+            # Re-detect storage for the new device
+            try:
+                self.log("Rilevamento storage...")
+                self.available_storage = get_storage_roots(self.device_serial)
+                if self.available_storage:
+                    storage_list = ", ".join(self.available_storage.values())
+                    self.log(f"Storage trovati: {storage_list}")
+                    self.storage_btn.setEnabled(True)
+                else:
+                    self.log("Nessuno storage rilevato")
+                    self.storage_btn.setEnabled(False)
+            except ADBError as e:
+                self.log(f"Errore nel rilevare storage: {e}")
+                self.storage_btn.setEnabled(False)
     
     def start_scan_animation(self):
         """Start the scanning animation in the tree."""
@@ -553,7 +617,13 @@ class MainWindow(QMainWindow):
         # Show scanning animation
         self.start_scan_animation()
         
-        self.scan_worker = ScanWorker(self.selected_storage, self.selected_categories)
+        self.scan_worker = ScanWorker(
+            self.selected_storage, 
+            self.selected_categories,
+            self.include_hidden,
+            self.include_system,
+            self.device_serial
+        )
         self.scan_worker.progress.connect(lambda msg: self.log(f"   {msg}"))
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
@@ -702,7 +772,7 @@ class MainWindow(QMainWindow):
         
         # Analyze in background
         self.log("\nAnalisi file in corso...")
-        self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination)
+        self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination, self.include_hidden, self.include_system, self.device_serial)
         self.analyze_worker.finished.connect(self.on_analyze_finished)
         self.analyze_worker.error.connect(self.on_analyze_error)
         self.analyze_worker.start()
@@ -759,7 +829,14 @@ class MainWindow(QMainWindow):
         # Start worker
         folders = self.get_selected_folders()
         self._last_logged_file = None  # Reset for new backup
-        self.backup_worker = BackupWorker(folders, self.selected_categories, self.destination)
+        self.backup_worker = BackupWorker(
+            folders, 
+            self.selected_categories, 
+            self.destination,
+            self.include_hidden,
+            self.include_system,
+            self.device_serial
+        )
         self.backup_worker.progress.connect(self.on_backup_progress)
         self.backup_worker.finished.connect(self.on_backup_finished)
         self.backup_worker.start()
