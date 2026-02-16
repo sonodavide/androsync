@@ -262,7 +262,7 @@ def run_cli(
         scan_sdcard: Whether to scan SD card.
     """
     console.print(Panel.fit(
-        "[bold cyan]Android Media Backup[/]\n[dim]Backup incrementale dei media via ADB[/]",
+        "[bold cyan]AndroSync[/]\n[dim]Backup incrementale dei media via ADB[/]",
         border_style="cyan"
     ))
     

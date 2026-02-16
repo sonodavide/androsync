@@ -45,6 +45,8 @@ class MainWindow(QMainWindow):
         self.available_storage: dict[str, str] = {}  # path -> name
         self.selected_storage: dict[str, str] = {}   # path -> name
         self.selected_categories: list[str] = ['media']
+        self._last_logged_file: Optional[str] = None  # Track last logged file
+        self._scan_is_stale = False  # Track if scan needs refresh
         
         self.log_file = None # Initialize log file handle
         self.setup_logging() # Call setup_logging
@@ -68,14 +70,14 @@ class MainWindow(QMainWindow):
         try:
             self.log_file = open(log_path, 'a', encoding='utf-8', buffering=1)  # Line buffered
             # Write header
-            self.log_file.write(f"=== Android Media Backup GUI Log Started: {timestamp} ===\n")
+            self.log_file.write(f"=== AndroSync GUI Log Started: {timestamp} ===\n")
         except OSError as e:
             print(f"Failed to create log file: {e}")
             self.log_file = None # Ensure it's None if creation failed
 
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle("Android Media Backup")
+        self.setWindowTitle("AndroSync")
         self.setMinimumSize(800, 600)
         
         # Central widget
@@ -132,7 +134,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(frame)
         
         # Title
-        title = QLabel("Android Backup")
+        title = QLabel("AndroSync")
         title.setFont(QFont("", 16, QFont.Weight.Bold))
         layout.addWidget(title)
         
@@ -201,6 +203,10 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.selected_categories = dialog.get_selected_categories()
             self.update_category_label()
+            # Invalidate scan if categories changed
+            if self.scan_result:
+                self._scan_is_stale = True
+                self.update_scan_button_state()
     
     def update_category_label(self):
         """Update label with selected categories."""
@@ -237,6 +243,10 @@ class MainWindow(QMainWindow):
             self.selected_storage = dialog.get_selected_storage()
             self.update_storage_label()
             self.scan_btn.setEnabled(len(self.selected_storage) > 0)
+            # Invalidate scan if storage changed
+            if self.scan_result:
+                self._scan_is_stale = True
+                self.update_scan_button_state()
     
     def update_storage_label(self):
         """Update the storage label with selected storage names."""
@@ -245,6 +255,15 @@ class MainWindow(QMainWindow):
             self.storage_label.setText(", ".join(names))
         else:
             self.storage_label.setText("Nessuno storage selezionato")
+    
+    def update_scan_button_state(self):
+        """Update scan button text to show if rescan is needed."""
+        if self._scan_is_stale:
+            self.scan_btn.setText("⚠️ Avvia Scansione (richiesta)")
+            self.scan_btn.setStyleSheet("background-color: #FF9800; font-weight: bold;")
+        else:
+            self.scan_btn.setText("Avvia Scansione")
+            self.scan_btn.setStyleSheet("")
     
     def create_folder_tree(self) -> QWidget:
         """Create folder selection tree."""
@@ -739,6 +758,7 @@ class MainWindow(QMainWindow):
         
         # Start worker
         folders = self.get_selected_folders()
+        self._last_logged_file = None  # Reset for new backup
         self.backup_worker = BackupWorker(folders, self.selected_categories, self.destination)
         self.backup_worker.progress.connect(self.on_backup_progress)
         self.backup_worker.finished.connect(self.on_backup_finished)
@@ -750,7 +770,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(total_done)
         
         if progress.current_file:
-            self.progress_bar.setFormat(f"%p% - {progress.current_file}")
+            # Show just filename in progress bar for UI readability
+            filename = os.path.basename(progress.current_file)
+            self.progress_bar.setFormat(f"%p% - {filename}")
+            
+            # Log full local path (avoid duplicate logging)
+            if progress.current_file != self._last_logged_file:
+                self.log(f"   [>>] {progress.current_file}")
+                self._last_logged_file = progress.current_file
             
         if progress.error_message:
             # Log the specific error
@@ -834,7 +861,7 @@ class MainWindow(QMainWindow):
 def run_gui():
     """Run the GUI application."""
     app = QApplication(sys.argv)
-    app.setApplicationName("Android Media Backup")
+    app.setApplicationName("AndroSync")
     
     window = MainWindow()
     window.show()

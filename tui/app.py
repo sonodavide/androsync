@@ -228,7 +228,7 @@ class AndroSyncTUI(App):
         try:
             self.log_file = open(log_path, 'a', encoding='utf-8')
             # Write header
-            self.log_file.write(f"=== Android Media Backup TUI Log Started: {timestamp} ===\n")
+            self.log_file.write(f"=== AndroSync TUI Log Started: {timestamp} ===\n")
             self.log_file.flush()
         except OSError:
             pass
@@ -566,8 +566,14 @@ class AndroSyncTUI(App):
             self._log_message(f"[red]ERROR:[/red] {bp.current_file} -> {bp.error_message}")
 
         if bp.current_file:
+            # Show only filename in UI, but log full path to file
             filename = bp.current_file.split('/')[-1] if '/' in bp.current_file else bp.current_file
-            self._log_message(f"[green]󰄬[/green] {filename}")
+            # Log full path (only when file count increases)
+            if not hasattr(self, '_last_tui_completed'):
+                self._last_tui_completed = 0
+            if bp.completed_files > self._last_tui_completed:
+                self._log_message(f"[green]󰄬[/green] {bp.current_file}")
+                self._last_tui_completed = bp.completed_files
     
     def _on_backup_complete(self, result: BackupProgress, elapsed_time: float) -> None:
         """Handle backup completion."""
@@ -616,7 +622,7 @@ class AndroSyncTUI(App):
         if self.log_file:
             try:
                 import datetime
-                self.log_file.write(f"=== Android Media Backup TUI Log Ended: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} ===\n")
+                self.log_file.write(f"=== AndroSync TUI Log Ended: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} ===\n")
                 self.log_file.close()
             except OSError:
                 pass

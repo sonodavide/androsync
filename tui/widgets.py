@@ -16,7 +16,7 @@ class GradientHeader(Static):
     
     def compose(self) -> ComposeResult:
         yield Static(
-            "󰀲  [bold cyan]AndroSync[/bold cyan] [dim]│[/dim] Android Backup Tool",
+            "󰀲  [bold cyan]AndroSync[/bold cyan] [dim]│[/dim] Media Backup Tool",
             id="header-title"
         )
 

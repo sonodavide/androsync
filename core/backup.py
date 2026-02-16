@@ -270,7 +270,8 @@ class BackupManager:
                 progress.status = BackupStatus.CANCELLED
                 break
             
-            progress.current_file = os.path.basename(file_to_sync.remote_path)
+            # Set current file to local path for detailed logging
+            progress.current_file = file_to_sync.local_path
             
             if progress_callback:
                 progress_callback(progress)
@@ -291,6 +292,7 @@ class BackupManager:
                     progress.completed_bytes += file_to_sync.size
                 else:
                     progress.failed_files += 1
+                    progress.error_message = "Failed to download file"
                     
             except ADBError as e:
                 progress.failed_files += 1
