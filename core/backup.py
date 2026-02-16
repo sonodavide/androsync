@@ -128,7 +128,9 @@ class BackupManager:
         
         # Use thread pool for parallel file stat
         # Threads are ideal for I/O bound operations like file stat
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        # Use min(32, (cpu_count or 1) * 4) for optimal I/O performance
+        max_workers = min(32, (os.cpu_count() or 1) * 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_path = {
                 executor.submit(self._check_local_file, path, size): path
                 for path, size in files

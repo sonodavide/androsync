@@ -55,8 +55,12 @@ EXPAND_DIRECTORIES = {
 }
 
 
-def get_extensions_for_categories(categories: list[str]) -> set[str]:
-    """Get combined extensions for selected categories."""
+def get_extensions_for_categories(categories: list[str]) -> tuple[set[str], bool]:
+    """Get combined extensions for selected categories.
+    
+    Returns:
+        Tuple of (extensions_set, include_other_flag)
+    """
     extensions = set()
     include_other = False
     
@@ -106,12 +110,21 @@ def get_file_subcategory(filename: str) -> str:
 
 def is_file_in_categories(filename: str, categories: list[str]) -> bool:
     """Check if a file matches any of the selected categories."""
-    ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if '.' not in filename:
+        # File without extension - only matches 'other' category
+        ext = ''
+    else:
+        parts = filename.rsplit('.', 1)
+        if len(parts) == 2:
+            ext = '.' + parts[1].lower()
+        else:
+            ext = ''
+    
     extensions, include_other = get_extensions_for_categories(categories)
     
-    if ext in extensions:
+    if ext and ext in extensions:
         return True
-    if include_other and ext not in ALL_KNOWN_EXTENSIONS:
+    if include_other and (not ext or ext not in ALL_KNOWN_EXTENSIONS):
         return True
     return False
 

@@ -36,6 +36,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.scan_result: Optional[ScanResult] = None
         self.destination: Optional[str] = None
+        self.scan_worker: Optional[ScanWorker] = None
+        self.analyze_worker: Optional[AnalyzeWorker] = None
         self.backup_worker: Optional[BackupWorker] = None
         self.is_scanning = False
         self.scan_animation_timer: Optional[QTimer] = None
@@ -64,10 +66,9 @@ class MainWindow(QMainWindow):
         log_path = os.path.join(log_dir, filename)
         
         try:
-            self.log_file = open(log_path, 'a', encoding='utf-8')
+            self.log_file = open(log_path, 'a', encoding='utf-8', buffering=1)  # Line buffered
             # Write header
             self.log_file.write(f"=== Android Media Backup GUI Log Started: {timestamp} ===\n")
-            self.log_file.flush()
         except OSError as e:
             print(f"Failed to create log file: {e}")
             self.log_file = None # Ensure it's None if creation failed
@@ -113,7 +114,7 @@ class MainWindow(QMainWindow):
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p% - %v/%m file")
+        self.progress_bar.setFormat("%p% - %v/%m file(s)")
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
         
@@ -416,11 +417,10 @@ class MainWindow(QMainWindow):
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         
-        # Write to log file
-        if self.log_file:
+        # Write to log file (auto-flushed with line buffering)
+        if self.log_file and not self.log_file.closed:
             try:
                 self.log_file.write(message + '\n')
-                self.log_file.flush()
             except OSError:
                 pass
     
@@ -685,8 +685,16 @@ class MainWindow(QMainWindow):
         self.log("\nAnalisi file in corso...")
         self.analyze_worker = AnalyzeWorker(folders, self.selected_categories, self.destination)
         self.analyze_worker.finished.connect(self.on_analyze_finished)
-        self.analyze_worker.error.connect(lambda e: self.log(f"ERRORE: {e}"))
+        self.analyze_worker.error.connect(self.on_analyze_error)
         self.analyze_worker.start()
+    
+    def on_analyze_error(self, error: str):
+        """Handle analyze worker error."""
+        self.log(f"ERRORE durante l'analisi: {error}")
+        # Re-enable backup button
+        self.backup_btn.setEnabled(True)
+        self.backup_btn.setText("Avvia Backup")
+        QMessageBox.critical(self, "Errore", f"Errore durante l'analisi:\n{error}")
     
     def on_analyze_finished(self, to_sync: list, already_synced: list):
         """Handle analyze completion and show confirmation dialog."""
@@ -813,7 +821,7 @@ class MainWindow(QMainWindow):
             self.backup_worker.cancel()
             self.backup_worker.wait(3000)  # Wait max 3 seconds
         
-        if self.log_file:
+        if self.log_file and not self.log_file.closed:
             try:
                 self.log_file.write("=== Application Closed ===\n")
                 self.log_file.close()

@@ -3,8 +3,10 @@ ADB Wrapper Module
 Handles all communication with Android devices via ADB.
 """
 
+import os
 import subprocess
 import re
+import shlex
 from typing import Optional
 
 from .adb_models import Device, ADBError
