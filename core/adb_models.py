@@ -17,3 +17,8 @@ class Device:
 class ADBError(Exception):
     """Exception raised for ADB-related errors."""
     pass
+
+
+class DeviceDisconnectedError(ADBError):
+    """Exception raised when the device is disconnected during an operation."""
+    pass

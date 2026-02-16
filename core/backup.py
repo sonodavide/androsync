@@ -10,7 +10,7 @@ from typing import Optional, Callable
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .adb import pull_file, pull_files_tar, ADBError, get_single_device
+from .adb import pull_file, pull_files_tar, ADBError, get_single_device, is_device_connected
 from .scanner import MediaFolder, get_all_media_files
 
 
@@ -20,6 +20,7 @@ class BackupStatus(Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    DISCONNECTED = "disconnected"
     ERROR = "error"
 
 
@@ -294,9 +295,26 @@ class BackupManager:
                     progress.failed_files += 1
                     progress.error_message = "Failed to download file"
                     
+                    # Check if device is still connected
+                    if not is_device_connected(self.device_serial):
+                        progress.status = BackupStatus.DISCONNECTED
+                        progress.error_message = "Dispositivo disconnesso"
+                        if progress_callback:
+                            progress_callback(progress)
+                        break
+                    
             except ADBError as e:
                 progress.failed_files += 1
                 progress.error_message = str(e)
+                
+                # Check if device is still connected
+                if not is_device_connected(self.device_serial):
+                    progress.status = BackupStatus.DISCONNECTED
+                    progress.error_message = "Dispositivo disconnesso"
+                    if progress_callback:
+                        progress_callback(progress)
+                    break
+                
             except OSError as e:
                 progress.failed_files += 1
                 progress.error_message = f"File system error: {e}"
@@ -305,7 +323,7 @@ class BackupManager:
                 progress_callback(progress)
         
         # Final status
-        if not self._cancelled:
+        if progress.status not in (BackupStatus.CANCELLED, BackupStatus.DISCONNECTED):
             progress.status = BackupStatus.COMPLETED
         
         progress.current_file = ""

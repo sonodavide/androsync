@@ -824,6 +824,26 @@ class MainWindow(QMainWindow):
         elif progress.status == BackupStatus.CANCELLED:
             self.log(f"\n[!] Backup interrotto dall'utente dopo {time_str}.")
             self.log("   I progressi sono stati salvati. Riavvia per riprendere.")
+        elif progress.status == BackupStatus.DISCONNECTED:
+            # Update device status in header
+            self.device_label.setText("[DISCONNESSO] Dispositivo scollegato")
+            
+            # Disable controls that require device
+            self.scan_btn.setEnabled(False)
+            self.backup_btn.setEnabled(False)
+            self.storage_btn.setEnabled(False)
+            
+            self.log(f"\n[!] Backup interrotto: dispositivo disconnesso dopo {time_str}.")
+            self.log(f"   Scaricati: {progress.completed_files:,} file prima della disconnessione")
+            self.log("   Ricollega il dispositivo e premi 'Aggiorna'.")
+            QMessageBox.warning(
+                self,
+                "Dispositivo Disconnesso",
+                f"Il dispositivo è stato scollegato durante il backup.\n\n"
+                f"- Scaricati: {progress.completed_files:,} file\n"
+                f"- Falliti: {progress.failed_files:,} file\n\n"
+                f"Ricollega il dispositivo e premi 'Aggiorna'."
+            )
     
     def cancel_backup(self):
         """Cancel ongoing backup."""

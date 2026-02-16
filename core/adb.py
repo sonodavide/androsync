@@ -90,6 +90,29 @@ def get_single_device() -> Optional[Device]:
     return None
 
 
+def is_device_connected(device_serial: Optional[str] = None) -> bool:
+    """
+    Quick check if the device is still connected and authorized.
+    
+    Args:
+        device_serial: Optional serial to check for a specific device.
+    
+    Returns:
+        True if at least one authorized device is connected
+        (or the specific device if serial is provided).
+    """
+    try:
+        devices = get_connected_devices()
+        authorized = [d for d in devices if d.status == "device"]
+        
+        if device_serial:
+            return any(d.serial == device_serial for d in authorized)
+        
+        return len(authorized) > 0
+    except ADBError:
+        return False
+
+
 def shell_command(command: str, device_serial: Optional[str] = None) -> str:
     """
     Execute a shell command on the Android device.

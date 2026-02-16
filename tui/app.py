@@ -601,6 +601,21 @@ class AndroSyncTUI(App):
                 self._log_message(f"[red]󰜺 Failed:[/red] {result.failed_files:,}")
         elif result.status == BackupStatus.CANCELLED:
             self.notify(f"Backup cancelled after {time_str}", severity="warning")
+        elif result.status == BackupStatus.DISCONNECTED:
+            # Update device status
+            self.device_connected = False
+            status_panel = self.query_one("#status-content", StatusPanel)
+            status_panel.device_status = "[red]󰜺 Device disconnected[/red]"
+            
+            # Disable backup button
+            btn_backup = self.query_one("#btn-backup", Button)
+            btn_backup.disabled = True
+            
+            self.notify(f"Device disconnected after {time_str}", severity="error", timeout=8)
+            self._log_message("")
+            self._log_message(f"[bold red]╔═══ Device Disconnected ({time_str}) ═══╗[/bold red]")
+            self._log_message(f"[green]󰄬 Completed before disconnect:[/green] {result.completed_files:,}")
+            self._log_message(f"[red]󰜺 Reconnect and press R to refresh[/red]")
     
     @on(Button.Pressed, "#btn-scan")
     def on_scan_button(self) -> None:

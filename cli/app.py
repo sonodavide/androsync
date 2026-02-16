@@ -237,6 +237,12 @@ def run_backup(folders: list[MediaFolder], destination: str):
                 console.print(Panel(result_panel, title="[bold green]Backup Completato![/]", border_style="green"))
             elif result.status == BackupStatus.CANCELLED:
                 console.print("[bold yellow]Backup interrotto. Potrai riprendere al prossimo avvio.[/]")
+            elif result.status == BackupStatus.DISCONNECTED:
+                result_panel = f"""[bold red]Dispositivo disconnesso durante il backup![/]
+[bold green]Completati:[/] {result.completed_files:,} file
+[bold red]Falliti:[/] {result.failed_files:,} file
+[dim]Ricollega il dispositivo e riavvia il backup per riprendere.[/]"""
+                console.print(Panel(result_panel, title="[bold red]Dispositivo Disconnesso[/]", border_style="red"))
                 
         except KeyboardInterrupt:
             manager.cancel()
