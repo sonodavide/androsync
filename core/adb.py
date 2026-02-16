@@ -5,21 +5,9 @@ Handles all communication with Android devices via ADB.
 
 import subprocess
 import re
-from dataclasses import dataclass
 from typing import Optional
 
-
-@dataclass
-class Device:
-    """Represents a connected Android device."""
-    serial: str
-    model: str
-    status: str
-
-
-class ADBError(Exception):
-    """Exception raised for ADB-related errors."""
-    pass
+from .adb_models import Device, ADBError
 
 
 def check_adb_available() -> bool:

@@ -14,22 +14,13 @@ from rich.prompt import Prompt, Confirm
 from rich import print as rprint
 
 from core.adb import check_adb_available, get_connected_devices, get_single_device, ADBError
-from core.scanner import scan_media_folders, MediaFolder, ScanResult
+from core.scanner import scan_media_folders
+from core.models import MediaFolder, ScanResult
+from core.utils import format_size
 from core.backup import BackupManager, BackupProgress, BackupStatus
 
 
 console = Console()
-
-
-def format_size(size_bytes: int) -> str:
-    """Format bytes to human readable string."""
-    if size_bytes >= 1024 ** 3:
-        return f"{size_bytes / (1024**3):.2f} GB"
-    elif size_bytes >= 1024 ** 2:
-        return f"{size_bytes / (1024**2):.2f} MB"
-    elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
-    return f"{size_bytes} B"
 
 
 def check_prerequisites() -> bool:

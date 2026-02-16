@@ -11,241 +11,22 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QProgressBar,
     QTextEdit, QFileDialog, QMessageBox, QFrame, QSplitter, QHeaderView,
-    QCheckBox, QDialog, QListWidget, QListWidgetItem, QDialogButtonBox
+    QCheckBox, QDialog
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 
-from core.adb import check_adb_available, get_connected_devices, get_single_device, ADBError
-from core.scanner import scan_media_folders, MediaFolder, ScanResult, get_storage_roots, FILE_CATEGORIES
-from core.backup import BackupManager, BackupProgress, BackupStatus
+from core.adb import check_adb_available, get_connected_devices, ADBError
+from core.scanner import scan_media_folders, ScanResult, get_storage_roots
+from core.categories import FILE_CATEGORIES
+from core.models import MediaFolder
+from core.utils import format_size
+from core.backup import BackupProgress, BackupStatus
 
-
-def format_size(size_bytes: int) -> str:
-    """Format bytes to human readable string."""
-    if size_bytes >= 1024 ** 3:
-        return f"{size_bytes / (1024**3):.2f} GB"
-    elif size_bytes >= 1024 ** 2:
-        return f"{size_bytes / (1024**2):.2f} MB"
-    elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
-    return f"{size_bytes} B"
-
-
-class ScanWorker(QThread):
-    """Worker thread for scanning device."""
-    finished = Signal(object)  # ScanResult or None
-    progress = Signal(str)  # Current folder being scanned
-    error = Signal(str)
-    
-    def __init__(self, storage_paths: dict[str, str], categories: list[str]):
-        """
-        Args:
-            storage_paths: Dict mapping path -> display name to scan
-            categories: List of categories to scan
-        """
-        super().__init__()
-        self.storage_paths = storage_paths
-        self.categories = categories
-    
-    def run(self):
-        try:
-            def on_progress(path: str, index: int, total: int):
-                self.progress.emit(f"Scansione: {path}")
-            
-            result = scan_media_folders(
-                storage_paths=self.storage_paths,
-                categories=self.categories,
-                progress_callback=on_progress
-            )
-            self.finished.emit(result)
-        except ADBError as e:
-            self.error.emit(str(e))
-            self.finished.emit(None)
-
-
-class BackupWorker(QThread):
-    """Worker thread for backup operation."""
-    progress = Signal(object)  # BackupProgress
-    finished = Signal(object, float)  # Final BackupProgress, elapsed_time
-    
-    def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
-        super().__init__()
-        self.folders = folders
-        self.categories = categories
-        self.destination = destination
-        self.manager: Optional[BackupManager] = None
-        self.start_time: float = 0
-    
-    def run(self):
-        import time
-        self.start_time = time.time()
-        self.manager = BackupManager(self.destination)
-        
-        def on_progress(bp: BackupProgress):
-            self.progress.emit(bp)
-        
-        result = self.manager.start_backup(
-            self.folders, 
-            categories=self.categories, 
-            progress_callback=on_progress
-        )
-        elapsed = time.time() - self.start_time
-        self.finished.emit(result, elapsed)
-    
-    def cancel(self):
-        if self.manager:
-            self.manager.cancel()
-
-
-class AnalyzeWorker(QThread):
-    """Worker thread for analyzing files before backup."""
-    finished = Signal(list, list)  # to_sync, already_synced
-    error = Signal(str)
-    
-    def __init__(self, folders: list[MediaFolder], categories: list[str], destination: str):
-        super().__init__()
-        self.folders = folders
-        self.categories = categories
-        self.destination = destination
-    
-    def run(self):
-        try:
-            manager = BackupManager(self.destination)
-            to_sync, already_synced = manager.analyze_folders(self.folders, self.categories)
-            self.finished.emit(to_sync, already_synced)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class NumericTreeWidgetItem(QTreeWidgetItem):
-    """QTreeWidgetItem that sorts numeric columns correctly."""
-    
-    # Columns that contain numeric data (0-indexed)
-    NUMERIC_COLUMNS = {2, 3, 4, 5}  # Foto, Video, Totale, Dimensione
-    
-    def __lt__(self, other: QTreeWidgetItem) -> bool:
-        column = self.treeWidget().sortColumn()
-        
-        if column in self.NUMERIC_COLUMNS:
-            # Get numeric data stored in UserRole
-            my_value = self.data(column, Qt.ItemDataRole.UserRole)
-            other_value = other.data(column, Qt.ItemDataRole.UserRole)
-            
-            if my_value is not None and other_value is not None:
-                return my_value < other_value
-        
-        # Fall back to string comparison
-        return self.text(column) < other.text(column)
-
-
-class StorageSelectionDialog(QDialog):
-    """Dialog for selecting which storage to scan."""
-    
-    def __init__(self, available_storage: dict[str, str], parent=None):
-        """
-        Args:
-            available_storage: Dict mapping path -> display name
-        """
-        super().__init__(parent)
-        self.available_storage = available_storage
-        self.selected_storage: dict[str, str] = {}
-        
-        self.setWindowTitle("Seleziona Storage")
-        self.setMinimumWidth(300)
-        self.setup_ui()
-    
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Instructions
-        label = QLabel("Seleziona gli storage da scansionare:")
-        layout.addWidget(label)
-        
-        # List with checkboxes
-        self.list_widget = QListWidget()
-        for path, name in self.available_storage.items():
-            item = QListWidgetItem(name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            # Default: select internal, not SD cards
-            if name == "Interno":
-                item.setCheckState(Qt.CheckState.Checked)
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            self.list_widget.addItem(item)
-        
-        layout.addWidget(self.list_widget)
-        
-        # Buttons
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-    
-    def get_selected_storage(self) -> dict[str, str]:
-        """Return dict of selected storage paths and names."""
-        selected = {}
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                path = item.data(Qt.ItemDataRole.UserRole)
-                name = item.text()
-                selected[path] = name
-        return selected
-
-
-class CategorySelectionDialog(QDialog):
-    """Dialog for selecting which file categories to scan."""
-    
-    def __init__(self, parent=None, selected_categories: list[str] = None):
-        super().__init__(parent)
-        self.selected_categories = selected_categories or ['media']
-        
-        self.setWindowTitle("Seleziona Categorie")
-        self.setMinimumWidth(300)
-        self.setup_ui()
-    
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Instructions
-        label = QLabel("Seleziona le categorie di file da scansionare:")
-        layout.addWidget(label)
-        
-        # List with checkboxes
-        self.list_widget = QListWidget()
-        for cat_id, cat_info in FILE_CATEGORIES.items():
-            item = QListWidgetItem(cat_info['name'])
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            if cat_id in self.selected_categories:
-                item.setCheckState(Qt.CheckState.Checked)
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-            item.setData(Qt.ItemDataRole.UserRole, cat_id)
-            self.list_widget.addItem(item)
-        
-        layout.addWidget(self.list_widget)
-        
-        # Buttons
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-    
-    def get_selected_categories(self) -> list[str]:
-        """Return list of selected category IDs."""
-        selected = []
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                cat_id = item.data(Qt.ItemDataRole.UserRole)
-                selected.append(cat_id)
-        return selected
+from .workers import ScanWorker, BackupWorker, AnalyzeWorker
+from .dialogs import StorageSelectionDialog, CategorySelectionDialog
+from .widgets import NumericTreeWidgetItem
+from .styles import get_stylesheet
 
 
 class MainWindow(QMainWindow):
@@ -272,7 +53,6 @@ class MainWindow(QMainWindow):
     def setup_logging(self):
         """Setup logging to file."""
         import datetime
-        import os
         
         # Create logs directory
         log_dir = os.path.join(os.getcwd(), 'logs')
@@ -291,16 +71,6 @@ class MainWindow(QMainWindow):
         except OSError as e:
             print(f"Failed to create log file: {e}")
             self.log_file = None # Ensure it's None if creation failed
-    
-    def closeEvent(self, event):
-        """Ensure log file is closed on application exit."""
-        if self.log_file:
-            try:
-                self.log_file.write(f"=== Android Media Backup GUI Log Ended: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} ===\n")
-                self.log_file.close()
-            except OSError:
-                pass # Ignore errors during close
-        super().closeEvent(event)
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -637,75 +407,7 @@ class MainWindow(QMainWindow):
     
     def apply_style(self):
         """Apply application stylesheet."""
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e1e;
-            }
-            QWidget {
-                color: #e0e0e0;
-                font-family: 'Segoe UI', 'Ubuntu', sans-serif;
-            }
-            QFrame#header {
-                background-color: #2d2d2d;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            QTreeWidget {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-            }
-            QTreeWidget::item {
-                padding: 5px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #3d3d3d;
-            }
-            QTextEdit {
-                background-color: #1a1a1a;
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-            }
-            QPushButton {
-                background-color: #3d3d3d;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #4d4d4d;
-            }
-            QPushButton:pressed {
-                background-color: #2d2d2d;
-            }
-            QPushButton:disabled {
-                background-color: #2d2d2d;
-                color: #666;
-            }
-            QProgressBar {
-                border: 1px solid #3d3d3d;
-                border-radius: 4px;
-                text-align: center;
-                background-color: #2d2d2d;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-                border-radius: 3px;
-            }
-            QHeaderView::section {
-                background-color: #2d2d2d;
-                border: none;
-                padding: 5px;
-            }
-            QCheckBox {
-                spacing: 5px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-        """)
+        self.setStyleSheet(get_stylesheet())
     
     def log(self, message: str):
         """Add message to log."""
@@ -713,6 +415,14 @@ class MainWindow(QMainWindow):
         # Auto scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        
+        # Write to log file
+        if self.log_file:
+            try:
+                self.log_file.write(message + '\n')
+                self.log_file.flush()
+            except OSError:
+                pass
     
     def check_device(self):
         """Check for connected Android device and detect available storage."""
@@ -1038,8 +748,6 @@ class MainWindow(QMainWindow):
             # Log the specific error
             self.log(f"[ERRORE] File: {progress.current_file}")
             self.log(f"   -> {progress.error_message}")
-            # Clear error from progress object if needed, but here we just log it
-            # The backend keeps going, so we just notify
             self.log("   Continuo con il prossimo file...")
     
     def on_backup_finished(self, progress: BackupProgress, elapsed_time: float):
