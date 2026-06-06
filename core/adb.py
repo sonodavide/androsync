@@ -385,6 +385,7 @@ def find_media_files(
     """
     Find all media files in a storage root using a single find command.
     Much faster than recursive ls.
+    Compatible with both GNU find (-printf) and BusyBox find (fallback via stat).
     
     Args:
         storage_root: Root path to search (e.g., /storage/emulated/0)
@@ -413,8 +414,15 @@ def find_media_files(
         for pattern in exclude_patterns:
             exclude_cmd += f' -path "*/{pattern}/*" -prune -o'
     
-    # Use find with printf for structured output
-    # Format: size|mtime|path
+    # Base find expression (paths only) - universally supported
+    find_paths_cmd = (
+        f'find "{storage_root}" '
+        f'{exclude_cmd} '
+        f'-type f \\( {ext_pattern} \\) '
+        f'2>/dev/null'
+    )
+
+    # Try GNU find with -printf first (faster, single pass)
     find_cmd = (
         f'find "{storage_root}" '
         f'{exclude_cmd} '
@@ -427,6 +435,59 @@ def find_media_files(
     except ADBError:
         return []
     
+    # Check if -printf produced valid structured output
+    has_printf_output = any(
+        '|' in line and len(line.split('|', 2)) == 3
+        for line in output.strip().split('\n')
+        if line.strip()
+    )
+    
+    if not has_printf_output:
+        # BusyBox fallback: get paths first, then stat each file
+        try:
+            paths_output = shell_command(find_paths_cmd, device_serial)
+        except ADBError:
+            return []
+        
+        paths = [p.strip() for p in paths_output.strip().split('\n') if p.strip()]
+        if not paths:
+            return []
+        
+        files = []
+        # Use stat to get size and mtime for all found files
+        # Process in batches to avoid arg list too long
+        batch_size = 200
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i:i + batch_size]
+            # stat -c "%s %Y %n" prints size, mtime (unix epoch), and name per line
+            quoted = ' '.join(f'"{p}"' for p in batch)
+            stat_cmd = f'stat -c "%s %Y %n" {quoted} 2>/dev/null'
+            try:
+                stat_out = shell_command(stat_cmd, device_serial)
+            except ADBError:
+                # Last resort: use 0 for size/mtime
+                for path in batch:
+                    name = path.rsplit('/', 1)[-1] if '/' in path else path
+                    files.append({'path': path, 'name': name, 'size': 0, 'mtime': '0', 'is_dir': False})
+                continue
+            
+            for line in stat_out.strip().split('\n'):
+                if not line.strip():
+                    continue
+                parts = line.split(' ', 2)
+                if len(parts) < 3:
+                    continue
+                try:
+                    size = int(parts[0])
+                    mtime = parts[1]
+                    path = parts[2]
+                    name = path.rsplit('/', 1)[-1] if '/' in path else path
+                    files.append({'path': path, 'name': name, 'size': size, 'mtime': mtime, 'is_dir': False})
+                except (ValueError, IndexError):
+                    continue
+        
+        return files
+
     files = []
     for line in output.strip().split('\n'):
         if not line or '|' not in line:
