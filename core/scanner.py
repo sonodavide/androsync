@@ -17,85 +17,108 @@ from .categories import (
 
 def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     """
-    Get all storage root paths on the device.
-    Avoids duplicates by resolving symlinks and checking real paths.
-    Tries multiple candidate paths for internal storage to handle different
-    Android versions and OEM layouts (e.g. /storage/self/primary on some tablets).
-    
+    Automatic Android storage discovery. Priority order:
+      1. $EXTERNAL_STORAGE env var  → internal/primary storage
+      2. $SECONDARY_STORAGE env var → SD card(s) (colon-separated on some ROMs)
+      3. /proc/mounts scan          → fuse/sdcardfs/esdfs mount points
+      4. /storage/ listing          → UUID-named SD cards not caught above
+      5. Hard-coded fallback        → last resort
+
     Returns:
-        Dict mapping storage path to storage type name.
+        Dict mapping storage path → human-readable label.
     """
-    roots = {}
-    seen_real_paths = set()
-    
-    # Candidates for internal storage, in priority order.
-    # /storage/self/primary is a common path on tablets where
-    # /storage/emulated/0 exists but is empty or inaccessible.
-    internal_candidates = [
-        '/sdcard',              # almost always a symlink → resolve it
-        '/storage/self/primary',
-        '/storage/emulated/0',
-    ]
-    
-    internal_path = None
-    for candidate in internal_candidates:
+    roots: dict[str, str] = {}
+    seen: set[str] = set()   # tracks both original and resolved paths
+
+    def _resolve(path: str) -> str:
+        """Follow symlinks on the device; return original on failure."""
         try:
-            # Resolve symlinks to get the real path
-            real_output = shell_command(f'readlink -f "{candidate}" 2>/dev/null', device_serial)
-            real_path = real_output.strip()
-            if not real_path:
-                real_path = candidate
-            
-            # Verify the resolved path is an accessible directory
-            check = shell_command(f'[ -d "{real_path}" ] && ls -1 "{real_path}" 2>/dev/null | head -1', device_serial)
-            if check.strip():  # Non-empty → path exists and has content
-                internal_path = real_path
-                break
+            out = shell_command(f'readlink -f "{path}" 2>/dev/null', device_serial)
+            real = out.strip()
+            return real if real else path
         except ADBError:
-            continue
-    
-    # Last resort: just use /storage/emulated/0 without verification
-    if not internal_path:
-        internal_path = '/storage/emulated/0'
-    
-    roots[internal_path] = "Interno"
-    seen_real_paths.add(internal_path)
-    
-    # Find external SD cards in /storage/
+            return path
+
+    def _accessible(path: str) -> bool:
+        """True if path is a non-empty directory accessible to adb shell."""
+        try:
+            out = shell_command(f'ls -1 "{path}" 2>/dev/null | head -1', device_serial)
+            return bool(out.strip())
+        except ADBError:
+            return False
+
+    def _add(path: str, label: str) -> bool:
+        """Add path if not already seen. Returns True if added."""
+        real = _resolve(path)
+        if path in seen or real in seen:
+            return False
+        roots[path] = label
+        seen.add(path)
+        seen.add(real)
+        return True
+
+    # ── 1. $EXTERNAL_STORAGE ─────────────────────────────────────────────────
     try:
-        output = shell_command('ls -1 /storage/ 2>/dev/null', device_serial)
-        for line in output.strip().split('\n'):
-            line = line.strip()
-            # Skip known non-storage entries and already-resolved internal
-            if not line or line in ['emulated', 'self']:
-                continue
-            
-            potential_path = f'/storage/{line}'
-            
-            # Resolve to real path to avoid symlinks
-            try:
-                real_output = shell_command(f'readlink -f "{potential_path}" 2>/dev/null', device_serial)
-                real_path = real_output.strip()
-                if not real_path:
-                    real_path = potential_path
-            except ADBError:
-                real_path = potential_path
-            
-            # Skip if we've already seen this real path
-            if real_path in seen_real_paths:
-                continue
-            
-            # Check if it's a valid directory
-            try:
-                check = shell_command(f'[ -d "{potential_path}" ] && echo "ok"', device_serial)
-                if 'ok' in check:
-                    roots[potential_path] = f"SD Card ({line})"
-                    seen_real_paths.add(real_path)
-            except ADBError:
-                pass
+        ext = shell_command('echo $EXTERNAL_STORAGE', device_serial).strip()
+        if ext and _accessible(ext):
+            _add(ext, "Interno")
     except ADBError:
         pass
-    
+
+    # ── 2. $SECONDARY_STORAGE ────────────────────────────────────────────────
+    try:
+        sec = shell_command('echo $SECONDARY_STORAGE', device_serial).strip()
+        if sec:
+            for part in sec.split(':'):
+                part = part.strip()
+                if part and _accessible(part):
+                    _add(part, f"SD Card ({part.rsplit('/', 1)[-1]})")
+    except ADBError:
+        pass
+
+    # ── 3. /proc/mounts (fuse / sdcardfs / esdfs) ────────────────────────────
+    try:
+        mounts_out = shell_command('cat /proc/mounts 2>/dev/null', device_serial)
+        for line in mounts_out.strip().split('\n'):
+            cols = line.split()
+            if len(cols) < 3:
+                continue
+            fs_type, mount_point = cols[2], cols[1]
+            if fs_type not in ('fuse', 'sdcardfs', 'esdfs'):
+                continue
+            if not (mount_point.startswith('/storage/') or mount_point.startswith('/mnt/')):
+                continue
+            # Ignore deep sub-paths (e.g. /storage/emulated/0/Android)
+            if mount_point.count('/') > 3:
+                continue
+            if not _accessible(mount_point):
+                continue
+            label = "Interno" if ('emulated' in mount_point or 'self' in mount_point) \
+                    else f"SD Card ({mount_point.rsplit('/', 1)[-1]})"
+            _add(mount_point, label)
+    except ADBError:
+        pass
+
+    # ── 4. /storage/ listing ─────────────────────────────────────────────────
+    try:
+        ls_out = shell_command('ls -1 /storage/ 2>/dev/null', device_serial)
+        for entry in ls_out.strip().split('\n'):
+            entry = entry.strip()
+            if not entry or entry in ('emulated', 'self'):
+                continue
+            path = f'/storage/{entry}'
+            if _accessible(path):
+                _add(path, f"SD Card ({entry})")
+    except ADBError:
+        pass
+
+    # ── 5. Fallback ───────────────────────────────────────────────────────────
+    if not roots:
+        for fb in ('/storage/self/primary', '/storage/emulated/0', '/sdcard'):
+            if _accessible(fb):
+                _add(fb, "Interno")
+                break
+
     return roots
 
 
