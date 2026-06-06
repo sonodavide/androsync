@@ -19,6 +19,8 @@ def check_adb_available() -> bool:
             ["adb", "version"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=5
         )
         return result.returncode == 0
@@ -41,6 +43,8 @@ def get_connected_devices() -> list[Device]:
             ["adb", "devices", "-l"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=10
         )
         
@@ -137,6 +141,8 @@ def shell_command(command: str, device_serial: Optional[str] = None) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=300  # 5 minutes timeout for long operations
         )
         
@@ -174,6 +180,8 @@ def pull_file(remote_path: str, local_path: str, device_serial: Optional[str] = 
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=600  # 10 minutes timeout for large files
         )
         
@@ -419,6 +427,9 @@ def find_media_files(
     try:
         paths_output = shell_command(find_cmd, device_serial)
     except ADBError:
+        return []
+
+    if not paths_output:
         return []
 
     paths = [p.strip() for p in paths_output.strip().split('\n') if p.strip()]
