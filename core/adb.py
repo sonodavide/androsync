@@ -383,9 +383,9 @@ def find_media_files(
     exclude_patterns: Optional[list[str]] = None
 ) -> list[dict]:
     """
-    Find all media files in a storage root using a single find command.
-    Much faster than recursive ls.
-    Compatible with both GNU find (-printf) and BusyBox find (fallback via stat).
+    Find all media files in a storage root.
+    Uses POSIX-compatible find -print | grep (works on all Android/BusyBox versions).
+    Avoids find \\( \\) grouping and -printf which are GNU-only and fail on BusyBox.
     
     Args:
         storage_root: Root path to search (e.g., /storage/emulated/0)
@@ -396,81 +396,49 @@ def find_media_files(
     Returns:
         List of dicts with: path, name, size, mtime
     """
-    # Build find command with all extensions
-    ext_conditions = []
-    if not extensions or '*' in extensions:
-        ext_pattern = "-name '*'"  # Match all
-    else:
-        for ext in extensions:
-            # Handle with and without dot
-            ext_clean = ext.lstrip('.')
-            ext_conditions.append(f'-iname "*.{ext_clean}"')
-        
-        ext_pattern = ' -o '.join(ext_conditions)
-    
-    # Build exclude patterns
+    # Build exclude clauses for find -prune (POSIX compatible, no grouping)
     exclude_cmd = ""
     if exclude_patterns:
         for pattern in exclude_patterns:
             exclude_cmd += f' -path "*/{pattern}/*" -prune -o'
-    
-    # Base find expression (paths only) - universally supported
-    find_paths_cmd = (
-        f'find "{storage_root}" '
+
+    # POSIX find: list all regular files, then filter by extension via grep.
+    # Avoids \( \) grouping and -printf which are GNU-only and fail on BusyBox.
+    find_cmd = (
+        f'find "{storage_root}"'
         f'{exclude_cmd} '
-        f'-type f \\( {ext_pattern} \\) '
-        f'2>/dev/null'
+        f'-type f -print 2>/dev/null'
     )
 
-    # Try GNU find with -printf first (faster, single pass)
-    find_cmd = (
-        f'find "{storage_root}" '
-        f'{exclude_cmd} '
-        f'-type f \\( {ext_pattern} \\) '
-        f'-printf "%s|%T@|%p\\n" 2>/dev/null'
-    )
-    
+    # Add grep extension filter if needed (grep -iE is available on all BusyBox)
+    if extensions and '*' not in extensions:
+        ext_list = sorted(e.lstrip('.') for e in extensions)
+        ext_pattern = '|'.join(ext_list)
+        find_cmd += f" | grep -iE '\.({ext_pattern})$'"
+
     try:
-        output = shell_command(find_cmd, device_serial)
+        paths_output = shell_command(find_cmd, device_serial)
     except ADBError:
         return []
-    
-    # Check if -printf produced valid structured output
-    has_printf_output = any(
-        '|' in line and len(line.split('|', 2)) == 3
-        for line in output.strip().split('\n')
-        if line.strip()
-    )
-    
-    if not has_printf_output:
-        # BusyBox fallback: get paths first, then stat each file
+
+    paths = [p.strip() for p in paths_output.strip().split('\n') if p.strip()]
+    if not paths:
+        return []
+
+    files = []
+    # Get size and mtime via stat in batches (avoids arg-list-too-long)
+    batch_size = 200
+    for i in range(0, len(paths), batch_size):
+        batch = paths[i:i + batch_size]
+        quoted = ' '.join(f'"{p}"' for p in batch)
+        # stat -c "%s %Y %n" → "<size> <mtime_epoch> <path>"
+        stat_cmd = f'stat -c "%s %Y %n" {quoted} 2>/dev/null'
         try:
-            paths_output = shell_command(find_paths_cmd, device_serial)
+            stat_out = shell_command(stat_cmd, device_serial)
         except ADBError:
-            return []
-        
-        paths = [p.strip() for p in paths_output.strip().split('\n') if p.strip()]
-        if not paths:
-            return []
-        
-        files = []
-        # Use stat to get size and mtime for all found files
-        # Process in batches to avoid arg list too long
-        batch_size = 200
-        for i in range(0, len(paths), batch_size):
-            batch = paths[i:i + batch_size]
-            # stat -c "%s %Y %n" prints size, mtime (unix epoch), and name per line
-            quoted = ' '.join(f'"{p}"' for p in batch)
-            stat_cmd = f'stat -c "%s %Y %n" {quoted} 2>/dev/null'
-            try:
-                stat_out = shell_command(stat_cmd, device_serial)
-            except ADBError:
-                # Last resort: use 0 for size/mtime
-                for path in batch:
-                    name = path.rsplit('/', 1)[-1] if '/' in path else path
-                    files.append({'path': path, 'name': name, 'size': 0, 'mtime': '0', 'is_dir': False})
-                continue
-            
+            stat_out = ""
+
+        if stat_out.strip():
             for line in stat_out.strip().split('\n'):
                 if not line.strip():
                     continue
@@ -482,35 +450,25 @@ def find_media_files(
                     mtime = parts[1]
                     path = parts[2]
                     name = path.rsplit('/', 1)[-1] if '/' in path else path
-                    files.append({'path': path, 'name': name, 'size': size, 'mtime': mtime, 'is_dir': False})
+                    files.append({
+                        'path': path,
+                        'name': name,
+                        'size': size,
+                        'mtime': mtime,
+                        'is_dir': False
+                    })
                 except (ValueError, IndexError):
                     continue
-        
-        return files
+        else:
+            # stat not available or failed — include files with zero metadata
+            for path in batch:
+                name = path.rsplit('/', 1)[-1] if '/' in path else path
+                files.append({
+                    'path': path,
+                    'name': name,
+                    'size': 0,
+                    'mtime': '0',
+                    'is_dir': False
+                })
 
-    files = []
-    for line in output.strip().split('\n'):
-        if not line or '|' not in line:
-            continue
-        
-        parts = line.split('|', 2)
-        if len(parts) != 3:
-            continue
-        
-        try:
-            size = int(parts[0])
-            mtime = parts[1].split('.')[0]  # Remove fractional seconds
-            path = parts[2]
-            name = path.rsplit('/', 1)[-1] if '/' in path else path
-            
-            files.append({
-                'path': path,
-                'name': name,
-                'size': size,
-                'mtime': mtime,
-                'is_dir': False
-            })
-        except (ValueError, IndexError):
-            continue
-    
     return files

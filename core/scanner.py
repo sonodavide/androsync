@@ -254,7 +254,22 @@ def scan_media_folders(
     
     for idx, (root, storage_type) in enumerate(storage_roots.items()):
         if progress_callback:
-            progress_callback(f"Scansione {storage_type}...", idx, total_roots)
+            progress_callback(f"Scansione {storage_type}: {root}", idx, total_roots)
+        
+        # --- Diagnostic: verify the path exists and is accessible ---
+        try:
+            ls_out = shell_command(f'ls -1 "{root}" 2>/dev/null | head -5', device_serial)
+            ls_lines = [l for l in ls_out.strip().split('\n') if l.strip()]
+            if ls_lines:
+                preview = ', '.join(ls_lines[:5])
+                if progress_callback:
+                    progress_callback(f"  Path OK — contenuto: {preview}{'...' if len(ls_lines) >= 5 else ''}", idx, total_roots)
+            else:
+                if progress_callback:
+                    progress_callback(f"  ATTENZIONE: {root} è vuoto o non accessibile", idx, total_roots)
+        except Exception:
+            if progress_callback:
+                progress_callback(f"  ATTENZIONE: impossibile leggere {root}", idx, total_roots)
         
         # Build exclude list: always skip system dirs, conditionally skip hidden dirs
         exclude = list(SKIP_DIRECTORIES)
