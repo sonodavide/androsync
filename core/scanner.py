@@ -19,6 +19,8 @@ def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     """
     Get all storage root paths on the device.
     Avoids duplicates by resolving symlinks and checking real paths.
+    Tries multiple candidate paths for internal storage to handle different
+    Android versions and OEM layouts (e.g. /storage/self/primary on some tablets).
     
     Returns:
         Dict mapping storage path to storage type name.
@@ -26,15 +28,35 @@ def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
     roots = {}
     seen_real_paths = set()
     
-    # Primary internal storage - resolve the real path
-    internal_path = '/storage/emulated/0'
-    try:
-        output = shell_command('readlink -f /sdcard', device_serial)
-        real_path = output.strip()
-        if real_path:
-            internal_path = real_path
-    except ADBError:
-        pass
+    # Candidates for internal storage, in priority order.
+    # /storage/self/primary is a common path on tablets where
+    # /storage/emulated/0 exists but is empty or inaccessible.
+    internal_candidates = [
+        '/sdcard',              # almost always a symlink → resolve it
+        '/storage/self/primary',
+        '/storage/emulated/0',
+    ]
+    
+    internal_path = None
+    for candidate in internal_candidates:
+        try:
+            # Resolve symlinks to get the real path
+            real_output = shell_command(f'readlink -f "{candidate}" 2>/dev/null', device_serial)
+            real_path = real_output.strip()
+            if not real_path:
+                real_path = candidate
+            
+            # Verify the resolved path is an accessible directory
+            check = shell_command(f'[ -d "{real_path}" ] && ls -1 "{real_path}" 2>/dev/null | head -1', device_serial)
+            if check.strip():  # Non-empty → path exists and has content
+                internal_path = real_path
+                break
+        except ADBError:
+            continue
+    
+    # Last resort: just use /storage/emulated/0 without verification
+    if not internal_path:
+        internal_path = '/storage/emulated/0'
     
     roots[internal_path] = "Interno"
     seen_real_paths.add(internal_path)
@@ -44,6 +66,7 @@ def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
         output = shell_command('ls -1 /storage/ 2>/dev/null', device_serial)
         for line in output.strip().split('\n'):
             line = line.strip()
+            # Skip known non-storage entries and already-resolved internal
             if not line or line in ['emulated', 'self']:
                 continue
             
@@ -66,7 +89,6 @@ def get_storage_roots(device_serial: Optional[str] = None) -> dict[str, str]:
             try:
                 check = shell_command(f'[ -d "{potential_path}" ] && echo "ok"', device_serial)
                 if 'ok' in check:
-                    # Use the real path, name it by the visible name
                     roots[potential_path] = f"SD Card ({line})"
                     seen_real_paths.add(real_path)
             except ADBError:
